@@ -1,0 +1,591 @@
+// FluentAI Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum LanguageLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum ConversationStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+// ==========================================
+// MODELS
+// ==========================================
+
+model User {
+  id                      String                   @id @default(uuid()) @db.Uuid
+  name                    String
+  email                   String                   @unique
+  password                String
+  nativeLanguage          String                   @default("ml")
+  learningLanguage        String                   @default("en")
+  level                   LanguageLevel            @default(BEGINNER)
+  avatar                  String?
+  isEmailVerified         Boolean                  @default(false)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  // Relationships
+  profile                 Profile?
+  learningProfile         LearningProfile?
+  conversationSessions     ConversationSession[]
+  refreshTokens            RefreshToken[]
+  emailVerificationTokens  EmailVerificationToken[]
+  passwordResetTokens      PasswordResetToken[]
+  vocabularies             Vocabulary[]
+  grammarMistakes          GrammarMistake[]
+  progress                 Progress[]
+  studyPlans              StudyPlan[]
+  learningProgress        LearningProgress?
+  dailyLearningLogs       DailyLearningLog[]
+  learningSessions        LearningSession[]
+  weakTopics              WeakTopic[]
+  vocabularyProgress      VocabularyProgress[]
+  lessonSessions          LessonSession[]
+  learnerAssessment       LearnerAssessment?
+  weeklyAssessments       WeeklyAssessment[]
+  objectiveMasteries      ObjectiveMastery[]
+
+  @@index([email])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Profile {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @unique @db.Uuid
+  bio              String?
+  country          String?
+  timezone         String?
+  dailyGoalMinutes Int      @default(15)
+  currentStreak    Int      @default(0)
+  totalXP          Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relationship to User
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("profiles")
+}
+
+model ConversationSession {
+  id              String             @id @default(uuid()) @db.Uuid
+  userId          String             @db.Uuid
+  title           String
+  topic           String?
+  lessonType      String?
+  language        String
+  difficulty      LanguageLevel
+  lastMessageAt   DateTime?
+  totalMessages   Int                @default(0)
+  startedAt       DateTime           @default(now())
+  endedAt         DateTime?
+  status          ConversationStatus @default(ACTIVE)
+  studyPlanId     String?            @db.Uuid @map("study_plan_id")
+  lessonId        String?            @db.Uuid @map("lesson_id")
+  durationMinutes Int?               @map("duration_minutes")
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  // Relationships
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("conversation_sessions")
+}
+
+model Message {
+  id                String              @id @default(uuid()) @db.Uuid
+  sessionId         String              @db.Uuid
+  role              MessageRole
+  content           String              @db.Text
+  translatedText    String?
+  correctedText     String?
+  feedback          String?
+  audioUrl          String?             @map("audio_url")
+  translatedContent String?             @map("translated_content")
+  createdAt         DateTime            @default(now())
+
+  // Relationship to ConversationSession
+  session   ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  token     String    @unique
+  userId    String    @db.Uuid
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  // Relationship to User
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  token      String    @unique
+  userId     String    @db.Uuid
+  expiresAt  DateTime
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  // Relationship to User
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  token     String    @unique
+  userId    String    @db.Uuid
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  // Relationship to User
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ==========================================
+// LEARNING MODELS
+// ==========================================
+
+model Vocabulary {
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String        @db.Uuid
+  word           String
+  meaning        String
+  example        String?
+  language       String
+  difficulty     LanguageLevel @default(BEGINNER)
+  mastered       Boolean       @default(false)
+  reviewCount    Int           @default(0)
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relationship to User
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([language])
+  @@index([mastered])
+  @@index([nextReviewAt])
+  @@index([createdAt])
+  @@map("vocabularies")
+}
+
+model GrammarMistake {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  sentence        String   @db.Text
+  correctSentence String   @db.Text
+  explanation     String?  @db.Text
+  grammarRule     String?
+  mistakeType     String?
+  createdAt       DateTime @default(now())
+
+  // Relationship to User
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("grammar_mistakes")
+}
+
+model Lesson {
+  id               String        @id @default(uuid()) @db.Uuid
+  title            String
+  description      String?       @db.Text
+  level            LanguageLevel @default(BEGINNER)
+  language         String
+  estimatedMinutes Int           @default(15)
+  xpReward         Int           @default(10)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  // Relationships
+  progress         Progress[]
+
+  @@index([level])
+  @@index([language])
+  @@index([createdAt])
+  @@map("lessons")
+}
+
+model Progress {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  lessonId    String    @db.Uuid
+  completed   Boolean   @default(false)
+  score       Int       @default(0)
+  xpEarned    Int       @default(0)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relationships
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson      Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+  @@index([completed])
+  @@index([createdAt])
+  @@map("progress")
+}
+
+model LearningProfile {
+  id                  String             @id @default(uuid()) @db.Uuid
+  userId              String             @unique @db.Uuid @map("user_id")
+  ageGroup            String?            @map("age_group")
+  occupation          String?
+  englishLevel        String             @map("english_level")
+  nativeLanguage      String             @map("native_language")
+  dailyLearningGoal   Int                @default(15) @map("daily_learning_goal")
+  onboardingCompleted Boolean            @default(false) @map("onboarding_completed")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+
+  // Relationships
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goals               LearningGoal[]
+  interests           LearningInterest[]
+
+  @@index([userId])
+  @@map("learning_profiles")
+}
+
+model LearningGoal {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid @map("user_id")
+  goal      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  learningProfile LearningProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("learning_goals")
+}
+
+model LearningInterest {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid @map("user_id")
+  interest  String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  learningProfile LearningProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("learning_interests")
+}
+
+model StudyPlan {
+  id            String         @id @default(uuid()) @db.Uuid
+  userId        String         @db.Uuid @map("user_id")
+  title         String
+  description   String?        @db.Text
+  durationWeeks Int            @default(8) @map("duration_weeks")
+  weeksMetadata String?        @db.Text @map("weeks_metadata")
+  planVersion   Int            @default(1) @map("plan_version")
+  lastAdaptedAt DateTime?      @map("last_adapted_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  // Relationships
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  days          StudyPlanDay[]
+
+  @@index([userId])
+  @@map("study_plans")
+}
+
+enum StudyPlanDayStatus {
+  LOCKED
+  AVAILABLE
+  COMPLETED
+}
+
+model StudyPlanDay {
+  id               String             @id @default(uuid()) @db.Uuid
+  studyPlanId      String             @db.Uuid @map("study_plan_id")
+  dayNumber        Int                @map("day_number")
+  weekNumber       Int                @default(1) @map("week_number")
+  title            String
+  estimatedMinutes Int                @default(15) @map("estimated_minutes")
+  lessonType       String             @map("lesson_type")
+  lessonContent    String             @db.Text @map("lesson_content")
+  status           StudyPlanDayStatus @default(LOCKED)
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  // Relationships
+  studyPlan        StudyPlan          @relation(fields: [studyPlanId], references: [id], onDelete: Cascade)
+  lessonSessions   LessonSession[]
+
+  @@unique([studyPlanId, dayNumber])
+  @@index([studyPlanId])
+  @@map("study_plan_days")
+}
+
+model LearningProgress {
+  id                     String        @id @default(uuid()) @db.Uuid
+  userId                 String        @unique @db.Uuid @map("user_id")
+  lessonsCompleted       Int           @default(0) @map("lessons_completed")
+  conversationsCompleted Int           @default(0) @map("conversations_completed")
+  vocabularyLearned      Int           @default(0) @map("vocabulary_learned")
+  grammarTopicsCompleted Int           @default(0) @map("grammar_topics_completed")
+  listeningSessions      Int           @default(0) @map("listening_sessions")
+  pronunciationSessions  Int           @default(0) @map("pronunciation_sessions")
+  quizzesCompleted       Int           @default(0) @map("quizzes_completed")
+  studyMinutes           Int           @default(0) @map("study_minutes")
+  streak                 Int           @default(0)
+  completionPercentage   Float         @default(0.0) @map("completion_percentage")
+  currentLevel           String        @default("BEGINNER") @map("current_level")
+  totalMinutes           Int           @default(0) @map("total_minutes")
+  grammarCompleted        Int           @default(0) @map("grammar_completed")
+  vocabularyCompleted     Int           @default(0) @map("vocabulary_completed")
+  pronunciationCompleted  Int           @default(0) @map("pronunciation_completed")
+  listeningCompleted      Int           @default(0) @map("listening_completed")
+  quizCompleted           Int           @default(0) @map("quiz_completed")
+  xp                      Int           @default(0) @map("xp")
+  level                   Int           @default(1) @map("level")
+  lastLearningDate        DateTime?     @map("last_learning_date")
+  overallProgress         Float         @default(0.0) @map("overall_progress")
+  createdAt              DateTime      @default(now()) @map("created_at")
+  updatedAt              DateTime      @updatedAt @map("updated_at")
+
+  // Relationships
+  user                   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("learning_progress")
+}
+
+model DailyLearningLog {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid @map("user_id")
+  date             DateTime @db.Date
+  minutesStudied   Int      @default(0) @map("minutes_studied")
+  completedLessons Int      @default(0) @map("completed_lessons")
+  completedTasks   Int      @default(0) @map("completed_tasks")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@map("daily_learning_logs")
+}
+
+model LearningSession {
+  id                           String   @id @default(uuid()) @db.Uuid
+  userId                       String   @db.Uuid @map("user_id")
+  sessionId                    String?  @db.Uuid @map("session_id")
+  studyPlanDayId               String?  @db.Uuid @map("study_plan_day_id")
+  studyMinutes                 Int      @default(0) @map("study_minutes")
+  grammarScore                 Int      @default(0) @map("grammar_score")
+  vocabularyScore              Int      @default(0) @map("vocabulary_score")
+  fluencyScore                 Int      @default(0) @map("fluency_score")
+  confidenceScore              Int      @default(0) @map("confidence_score")
+  pronunciationScore           Int      @default(0) @map("pronunciation_score")
+  lessonCompletionPercentage   Float    @default(0.0) @map("lesson_completion_percentage")
+  completedTasks               String?  @db.Text @map("completed_tasks")
+  weakTopics                   String?  @db.Text @map("weak_topics")
+  newWords                     String?  @db.Text @map("new_words")
+  recommendations              String?  @db.Text @map("recommendations")
+  createdAt                    DateTime @default(now()) @map("created_at")
+
+  user                         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("learning_sessions")
+}
+
+model WeakTopic {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid @map("user_id")
+  topic            String
+  mistakeCount     Int      @default(0) @map("mistake_count")
+  improvementScore Int      @default(0) @map("improvement_score")
+  lastPracticed    DateTime @default(now()) @map("last_practiced")
+  status           String   @default("active") // active, improving, mastered
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topic])
+  @@index([userId])
+  @@map("weak_topics")
+}
+
+model VocabularyProgress {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid @map("user_id")
+  word              String
+  meaning           String
+  timesSeen         Int       @default(0) @map("times_seen")
+  timesCorrect      Int       @default(0) @map("times_correct")
+  masteryPercentage Float     @default(0.0) @map("mastery_percentage")
+  lastReviewed      DateTime? @map("last_reviewed")
+  status            String    @default("new") // new, learning, mastered
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, word])
+  @@index([userId])
+  @@map("vocabulary_progress")
+}
+
+enum LessonSessionStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model LessonSession {
+  id                   String              @id @default(uuid()) @db.Uuid
+  userId               String              @db.Uuid @map("user_id")
+  studyPlanId          String              @db.Uuid @map("study_plan_id")
+  weekId               Int                 @map("week_id")
+  dayId                String              @db.Uuid @map("day_id")
+  lessonId             String?             @db.Uuid @map("lesson_id")
+  status               LessonSessionStatus @default(NOT_STARTED)
+  startedAt            DateTime            @default(now()) @map("started_at")
+  completedAt          DateTime?           @map("completed_at")
+  duration             Int                 @default(0)
+  completionPercentage Float               @default(0.0) @map("completion_percentage")
+  aiSummary            String?             @db.Text @map("ai_summary")
+  xpEarned             Int                 @default(0) @map("xp_earned")
+
+  // Relationships
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studyPlanDay         StudyPlanDay        @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([dayId])
+  @@map("lesson_sessions")
+}
+
+model LearnerAssessment {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @unique @db.Uuid @map("user_id")
+  grammar             Int      @default(0)
+  vocabulary          Int      @default(0)
+  reading             Int      @default(0)
+  speaking            Int      @default(0)
+  listening           Int      @default(0)
+  writing             Int      @default(0)
+  pronunciation       Int      @default(0)
+  fluency             Int      @default(0)
+  
+  actualGrammar       Int      @default(0) @map("actual_grammar")
+  actualVocabulary    Int      @default(0) @map("actual_vocabulary")
+  actualSpeaking      Int      @default(0) @map("actual_speaking")
+  actualListening     Int      @default(0) @map("actual_listening")
+  actualReading       Int      @default(0) @map("actual_reading")
+  actualWriting       Int      @default(0) @map("actual_writing")
+  actualPronunciation Int      @default(0) @map("actual_pronunciation")
+  actualFluency       Int      @default(0) @map("actual_fluency")
+  actualStrengths     String?  @db.Text @map("actual_strengths")
+  actualWeaknesses    String?  @db.Text @map("actual_weaknesses")
+  actualLevel         String   @default("Pre-A1") @map("actual_level")
+  actualScore         Int      @default(0) @map("actual_score")
+  completed           Boolean  @default(false)
+  metadata            String?  @db.Text
+
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("learner_assessments")
+}
+
+model WeeklyAssessment {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid @map("user_id")
+  weekNumber    Int      @map("week_number")
+  grammar       Int
+  speaking      Int
+  listening     Int
+  writing       Int
+  pronunciation Int
+  fluency       Int
+  feedback      String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekNumber])
+  @@index([userId])
+  @@map("weekly_assessments")
+}
+
+model ObjectiveMastery {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid @map("user_id")
+  objective     String
+  masteryScore  Float    @default(0.0) @map("mastery_score")
+  accuracy      Float    @default(0.0)
+  attemptsCount Int      @default(0) @map("attempts_count")
+  lastPracticed DateTime @default(now()) @map("last_practiced")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, objective])
+  @@index([userId])
+  @@map("objective_masteries")
+}
+

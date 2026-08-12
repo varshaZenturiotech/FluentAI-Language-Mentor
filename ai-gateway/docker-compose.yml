@@ -1,0 +1,13 @@
+services:
+  ai-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fluentai-ai-gateway
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PORT=5001
