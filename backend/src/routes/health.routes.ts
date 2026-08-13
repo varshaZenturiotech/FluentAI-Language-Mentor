@@ -9,5 +9,6 @@ const router = Router();
  * @access  Public
  */
 router.get('/health', healthController.checkHealth);
+router.get('/health/diagnose-gateway', healthController.diagnoseGateway);
 
 export default router;
