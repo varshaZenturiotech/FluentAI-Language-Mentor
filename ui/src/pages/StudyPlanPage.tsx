@@ -53,6 +53,7 @@ export const StudyPlanPage: React.FC = () => {
   const [expandedWeeks, setExpandedWeeks] = useState<Record<number, boolean>>({ 1: true });
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
   const [showRegenerateModal, setShowRegenerateModal] = useState(false);
+  const [startingDayId, setStartingDayId] = useState<string | null>(null);
 
   if (isLoadingDashboard || isLoadingProfile) {
     return (
@@ -242,26 +243,20 @@ export const StudyPlanPage: React.FC = () => {
     return 'LOCKED';
   };
 
-  // Track which day is currently being started so individual buttons show a loading state.
-  const [startingDayId, setStartingDayId] = useState<string | null>(null);
-  const [startError, setStartError] = useState<string | null>(null);
-
-  // Navigate tasks to the AI Conversation module.
-  // The backend always creates a ConversationSession for every lesson type,
-  // so every task type navigates to /conversation with sessionId + dayId.
-  const handleTaskStart = async (taskType: string, dayId: string, _isTaskComplete: boolean) => {
+  // Navigate tasks to modules
+  const handleTaskStart = async (taskType: string, dayId: string, isTaskComplete: boolean) => {
     setStartingDayId(dayId);
-    setStartError(null);
     try {
       const result = await startLesson(dayId);
       const sessionId = result?.conversationSession?.id;
-      if (!sessionId) {
-        throw new Error('Could not retrieve a conversation session from the server.');
+      if (sessionId) {
+        navigate(`/conversation?sessionId=${sessionId}&dayId=${dayId}`);
+      } else {
+        navigate(`/conversation?dayId=${dayId}`);
       }
-      navigate(`/conversation?sessionId=${sessionId}&dayId=${dayId}&lessonType=${encodeURIComponent(taskType)}`);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to start lesson:', err);
-      setStartError(err?.message || 'Failed to start the lesson. Please try again.');
+      navigate(`/conversation?dayId=${dayId}`);
     } finally {
       setStartingDayId(null);
     }
@@ -302,16 +297,6 @@ export const StudyPlanPage: React.FC = () => {
 
   return (
     <div className="space-y-8 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-
-      {/* Lesson start error banner */}
-      {startError && (
-        <div className="flex items-center gap-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl px-4 py-3 text-sm font-semibold shadow-sm">
-          <span className="shrink-0">⚠️</span>
-          <span>{startError}</span>
-          <button onClick={() => setStartError(null)} className="ml-auto text-rose-400 hover:text-rose-600 font-bold text-xs">✕</button>
-        </div>
-      )}
-
       {/* ================= HERO SECTION ================= */}
       <div className="gradient-bg rounded-[32px] p-6 sm:p-8 text-white shadow-xl shadow-indigo-500/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl pointer-events-none" />
@@ -642,9 +627,9 @@ export const StudyPlanPage: React.FC = () => {
                                           <Button
                                             size="sm"
                                             variant={isTaskCompleted ? 'secondary' : 'primary'}
-                                            onClick={() => handleTaskStart(task.type, day.id, isTaskCompleted)}
                                             isLoading={startingDayId === day.id}
-                                            disabled={startingDayId === day.id}
+                                            disabled={isStartingLesson || startingDayId === day.id}
+                                            onClick={() => handleTaskStart(task.type, day.id, isTaskCompleted)}
                                             className="text-[10px] py-1 px-3.5 font-bold flex items-center gap-1"
                                           >
                                             {isTaskCompleted ? (
@@ -717,6 +702,8 @@ export const StudyPlanPage: React.FC = () => {
               {activeDay ? (
                 <Button
                   size="md"
+                  isLoading={startingDayId === activeDay.id}
+                  disabled={isStartingLesson || startingDayId === activeDay.id}
                   onClick={() => handleTaskStart(activeDay.lessonType, activeDay.id, false)}
                   className="w-full font-black text-xs"
                 >

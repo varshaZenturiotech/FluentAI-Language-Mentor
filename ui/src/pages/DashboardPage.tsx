@@ -35,6 +35,7 @@ export const DashboardPage: React.FC = () => {
     isLoadingDashboard,
     generatePlan,
     isGeneratingPlan,
+    startLesson,
     completeDay,
     isCompletingDay,
     refetchDashboard
@@ -158,12 +159,20 @@ export const DashboardPage: React.FC = () => {
   const currentAvailableDay = studyPlan?.days?.find((d: any) => d.status === 'AVAILABLE');
 
   // Handle support card navigations
-  const handleTaskClick = (type: string) => {
-    if (type.toLowerCase() === 'conversation') {
-      navigate('/conversation');
-    } else {
-      navigate('/study-plan');
+  const handleTaskClick = async (type?: string) => {
+    if (currentAvailableDay) {
+      try {
+        const result = await startLesson(currentAvailableDay.id);
+        const sessionId = result?.conversationSession?.id;
+        if (sessionId) {
+          navigate(`/conversation?sessionId=${sessionId}&dayId=${currentAvailableDay.id}`);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to start lesson from dashboard:', err);
+      }
     }
+    navigate('/conversation');
   };
 
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
