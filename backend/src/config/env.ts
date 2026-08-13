@@ -30,7 +30,7 @@ export const env: IEnvConfig = {
   CLIENT_URL: getEnvVar('CLIENT_URL', 'http://localhost:5173'),
   VERSION: '1.0.0',
   AI_SERVICE_URL: getEnvVar('AI_SERVICE_URL', 'http://localhost:5001'),
-  AI_REQUEST_TIMEOUT: parseInt(getEnvVar('AI_REQUEST_TIMEOUT', '30000'), 10),
+  AI_REQUEST_TIMEOUT: parseInt(getEnvVar('AI_REQUEST_TIMEOUT', '120000'), 10),
   INTERNAL_API_KEY: getEnvVar('INTERNAL_API_KEY'),
 };
 

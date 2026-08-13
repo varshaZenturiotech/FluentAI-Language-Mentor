@@ -84,15 +84,14 @@ Last 10 Messages:
         pronunciation_score = None
         pronunciation_available = False
 
-        logger.info("Sending session analysis request to Groq")
-        response_text = await self.provider.complete(
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-            temperature=0.3,
-            json_mode=True
-        )
-
         try:
+            logger.info("Sending session analysis request to Groq")
+            response_text = await self.provider.complete(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+                temperature=0.3,
+                json_mode=True
+            )
             analysis_data = json.loads(response_text)
             # Inject pronunciation fields
             # Real pronunciation scoring should come from pronunciation_service.py once it's backed by actual audio analysis, and should be merged into the session-analysis response at that point rather than re-fabricated by the text-based LLM call.
@@ -100,7 +99,7 @@ Last 10 Messages:
             analysis_data["pronunciationScoreAvailable"] = pronunciation_available
             return analysis_data
         except Exception as e:
-            logger.error(f"Failed to parse session analysis JSON: {response_text}. Error: {str(e)}")
+            logger.error(f"Failed to parse session analysis: {str(e)}")
             # Fallback structure
             return {
                 "completed": False,
@@ -178,15 +177,14 @@ Instructions:
 Please evaluate all skills accordingly.
 """
 
-        logger.info("Sending baseline evaluation request to Groq")
-        response_text = await self.provider.complete(
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-            temperature=0.2,
-            json_mode=True
-        )
-
         try:
+            logger.info("Sending baseline evaluation request to Groq")
+            response_text = await self.provider.complete(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+                temperature=0.2,
+                json_mode=True
+            )
             evaluation = json.loads(response_text)
             # Ensure pronunciation is explicitly marked as unavailable
             evaluation["pronunciation"] = {
@@ -206,7 +204,7 @@ Please evaluate all skills accordingly.
             
             return evaluation
         except Exception as e:
-            logger.error(f"Failed to parse baseline evaluation JSON: {response_text}. Error: {str(e)}")
+            logger.error(f"Failed to parse baseline evaluation: {str(e)}")
             # Fallback structure
             return {
                 "grammar": { "score": 50, "level": "A2", "strengths": ["Basic structures"], "weaknesses": [] },

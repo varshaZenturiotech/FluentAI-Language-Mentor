@@ -10,7 +10,7 @@ from app.services.learning_service import learning_service
 client = TestClient(app)
 
 def test_study_plan_generate_exception_propagation():
-    """Verify that a provider exception during study plan generation returns HTTP 502."""
+    """Verify that a provider exception during study plan generation returns a fallback plan (HTTP 200)."""
     with patch.object(study_plan_service.provider, "complete", new_callable=AsyncMock) as mock_complete:
         mock_complete.side_effect = LLMProviderException("Groq API rate limit exceeded")
         
@@ -20,15 +20,15 @@ def test_study_plan_generate_exception_propagation():
             headers={"X-Internal-Key": settings.INTERNAL_API_KEY}
         )
         
-        assert response.status_code == 502
+        assert response.status_code == 200
         data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "LLM_PROVIDER_ERROR"
-        assert "Groq API rate limit" in data["error"]["message"]
+        assert data["success"] is True
+        assert data["data"]["title"] == "Personalized 8-Week English Roadmap for Software Engineer"
+        assert len(data["data"]["weeks"]) == 8
 
 
 def test_recommendations_exception_propagation():
-    """Verify that a provider exception during recommendation generation returns HTTP 502."""
+    """Verify that a provider exception during recommendation generation returns fallback recommendations (HTTP 200)."""
     with patch.object(study_plan_service.provider, "complete", new_callable=AsyncMock) as mock_complete:
         mock_complete.side_effect = LLMProviderException("Groq service unavailable")
         
@@ -43,15 +43,14 @@ def test_recommendations_exception_propagation():
             headers={"X-Internal-Key": settings.INTERNAL_API_KEY}
         )
         
-        assert response.status_code == 502
+        assert response.status_code == 200
         data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "LLM_PROVIDER_ERROR"
-        assert "Groq service unavailable" in data["error"]["message"]
+        assert data["success"] is True
+        assert data["data"]["focus"] == "Daily Grammar & Conversation Focus"
 
 
 def test_learning_analyze_exception_propagation():
-    """Verify that a provider exception during session analysis returns HTTP 502."""
+    """Verify that a provider exception during session analysis returns a fallback analysis (HTTP 200)."""
     with patch.object(learning_service.provider, "complete", new_callable=AsyncMock) as mock_complete:
         mock_complete.side_effect = LLMProviderException("Groq API quota exceeded")
         
@@ -64,11 +63,10 @@ def test_learning_analyze_exception_propagation():
             headers={"X-Internal-Key": settings.INTERNAL_API_KEY}
         )
         
-        assert response.status_code == 502
+        assert response.status_code == 200
         data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "LLM_PROVIDER_ERROR"
-        assert "Groq API quota exceeded" in data["error"]["message"]
+        assert data["success"] is True
+        assert data["data"]["completed"] is False
 
 
 def test_learning_analyze_pronunciation_scores():

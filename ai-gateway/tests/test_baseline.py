@@ -110,7 +110,7 @@ def test_evaluate_baseline_success():
 
 
 def test_evaluate_baseline_exception_propagation():
-    """Verify that a LLM provider exception during baseline evaluation propagates as 502."""
+    """Verify that a LLM provider exception during baseline evaluation yields fallback baseline metrics (HTTP 200)."""
     with patch.object(learning_service.provider, "complete", new_callable=AsyncMock) as mock_complete:
         mock_complete.side_effect = LLMProviderException("Groq API quota exceeded")
 
@@ -133,8 +133,9 @@ def test_evaluate_baseline_exception_propagation():
             headers={"X-Internal-Key": settings.INTERNAL_API_KEY}
         )
 
-        assert response.status_code == 502
+        assert response.status_code == 200
         data = response.json()
-        assert data["success"] is False
-        assert data["error"]["code"] == "LLM_PROVIDER_ERROR"
-        assert "Groq API quota exceeded" in data["error"]["message"]
+        assert data["success"] is True
+        assert data["data"]["overallLevel"] == "A2"
+        assert data["data"]["overallScore"] == 50
+        assert data["data"]["grammar"]["score"] == 50

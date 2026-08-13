@@ -99,15 +99,10 @@ Instructions:
                 json_mode=True,
                 max_tokens=4096
             )
-        except Exception as e:
-            logger.error(f"[STUDY_PLAN_GENERATION_FAILED] Groq completion call failed: {str(e)}")
-            raise e
-
-        groq_duration_ms = int((time.perf_counter() - groq_start_time) * 1000)
-        response_length = len(response_text)
-        logger.info(f"[GROQ_RESPONSE_RECEIVED] Received response from Groq. Length: {response_length} chars. Duration: {groq_duration_ms}ms")
-
-        try:
+            groq_duration_ms = int((time.perf_counter() - groq_start_time) * 1000)
+            response_length = len(response_text)
+            logger.info(f"[GROQ_RESPONSE_RECEIVED] Received response from Groq. Length: {response_length} chars. Duration: {groq_duration_ms}ms")
+            
             plan_data = json.loads(response_text)
             logger.info("[LLM_JSON_PARSED] Parsed response text as JSON successfully")
             
@@ -122,9 +117,9 @@ Instructions:
                 f"validation_status=success"
             )
             return plan_data
-        except (json.JSONDecodeError, ValidationError, TypeError, KeyError, ValueError) as e:
+        except Exception as e:
             logger.warning(
-                f"[FALLBACK_USED] Recoverable failure in parsing or validating LLM response: {str(e)}. "
+                f"[FALLBACK_USED] Failure in generating, parsing or validating LLM response: {str(e)}. "
                 f"Generating fallback study plan."
             )
             
@@ -169,7 +164,7 @@ Instructions:
                 
                 logger.info(
                     f"[STUDY_PLAN_GENERATION_SUCCESS] Generated fallback study plan successfully. "
-                    f"safe_metadata: duration_ms={groq_duration_ms}, response_length={response_length}, "
+                    f"safe_metadata: duration_ms=0, response_length=0, "
                     f"number_of_weeks={len(validated_fallback.weeks)}, "
                     f"number_of_days={sum(len(w.days) for w in validated_fallback.weeks)}, "
                     f"validation_status=fallback"
@@ -210,19 +205,18 @@ Vocabulary Studied Recently:
 {json.dumps(vocab[:10]) if vocab else "No vocabulary added yet."}
 """
 
-        logger.info(f"Generating recommendations for user profile: {profile}")
-        response_text = await self.provider.complete(
-            system_prompt=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-            temperature=0.7,
-            json_mode=True
-        )
-
         try:
+            logger.info(f"Generating recommendations for user profile: {profile}")
+            response_text = await self.provider.complete(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+                temperature=0.7,
+                json_mode=True
+            )
             rec_data = json.loads(response_text)
             return rec_data
         except Exception as e:
-            logger.error(f"Failed to parse recommendations JSON: {response_text}. Error: {str(e)}")
+            logger.error(f"Failed to generate or parse recommendations: {str(e)}")
             return {
                 "focus": "Daily Grammar & Conversation Focus",
                 "reason": "Let's work on conversation fluency and review common verbs.",

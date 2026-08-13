@@ -5,9 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     GROQ_API_KEY: str = Field(..., description="API key for Groq")
-    GROQ_MODEL: str = Field(default="llama-3.1-8b-instant", description="Model name for Groq completions")
+    GROQ_MODEL: str = Field(default="llama-3.3-70b-versatile", description="Model name for Groq completions")
     GROQ_STT_MODEL: str = Field(default="whisper-large-v3", description="Model name for Groq speech-to-text")
-    REQUEST_TIMEOUT: float = Field(default=10.0, description="Global request timeout in seconds")
+    REQUEST_TIMEOUT: float = Field(default=120.0, description="Global request timeout in seconds")
     LOG_LEVEL: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)")
     INTERNAL_API_KEY: str = Field(..., description="Shared secret key for authentication with Node backend")
     PORT: int = Field(default=5001, description="Port on which the FastAPI application runs")
