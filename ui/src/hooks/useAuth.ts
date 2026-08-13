@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppDispatch, useAppSelector } from '../store';
 import { authApi } from '../api/auth.api';
-import { setUser, setToken, setLoading, setError, logoutUser } from '../store/authSlice';
+import { setUser, setToken, setLoading, setError, setInitialized, logoutUser } from '../store/authSlice';
 import { LoginCredentials, RegisterPayload } from '../types/auth';
 
 export const useAuth = () => {
@@ -78,7 +78,12 @@ export const useAuth = () => {
       dispatch(setUser(currentUser));
       return currentUser;
     } catch (err: any) {
-      dispatch(logoutUser());
+      const status = err.response?.status || err.status;
+      if (status === 401 || status === 403) {
+        dispatch(logoutUser());
+      } else {
+        dispatch(setInitialized(true));
+      }
       throw err;
     } finally {
       dispatch(setLoading(false));

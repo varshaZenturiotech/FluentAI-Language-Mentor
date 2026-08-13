@@ -3,12 +3,14 @@ import { AuthState, User } from '../types/auth';
 
 export interface ExtendedAuthState extends AuthState {
   token: string | null;
+  isInitialized: boolean;
 }
 
 const initialState: ExtendedAuthState = {
   user: null,
-  isAuthenticated: !!localStorage.getItem('accessToken'),
+  isAuthenticated: false,
   isLoading: false,
+  isInitialized: !localStorage.getItem('accessToken'),
   error: null,
   token: localStorage.getItem('accessToken') || null,
 };
@@ -20,6 +22,7 @@ export const authSlice = createSlice({
     setUser: (state, action: PayloadAction<User | null>) => {
       state.user = action.payload;
       state.isAuthenticated = !!action.payload;
+      state.isInitialized = true;
       state.error = null;
     },
     setToken: (state, action: PayloadAction<string | null>) => {
@@ -32,14 +35,18 @@ export const authSlice = createSlice({
     setError: (state, action: PayloadAction<string | null>) => {
       state.error = action.payload;
     },
+    setInitialized: (state, action: PayloadAction<boolean>) => {
+      state.isInitialized = action.payload;
+    },
     logoutUser: (state) => {
       state.user = null;
       state.isAuthenticated = false;
       state.token = null;
+      state.isInitialized = true;
       state.error = null;
     },
   },
 });
 
-export const { setUser, setToken, setLoading, setError, logoutUser } = authSlice.actions;
+export const { setUser, setToken, setLoading, setError, setInitialized, logoutUser } = authSlice.actions;
 export default authSlice.reducer;

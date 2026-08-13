@@ -15,7 +15,17 @@ import { BaselineAssessmentPage } from '../pages/BaselineAssessmentPage';
 import { useAppSelector } from '../store';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated } = useAppSelector((state) => state.auth);
+  const { isAuthenticated, isInitialized } = useAppSelector((state) => state.auth);
+
+  if (!isInitialized) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-slate-500 font-medium">Verifying session...</p>
+      </div>
+    );
+  }
+
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 };
 

@@ -1,10 +1,23 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Navbar } from '../components/layout/Navbar';
 import { Footer } from '../components/layout/Footer';
 import { useProfile } from '../hooks/useProfile';
 import { useLearning } from '../hooks/useLearning';
+import { useAppSelector } from '../store';
+import { useAuth } from '../hooks/useAuth';
 
 export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { fetchCurrentUser } = useAuth();
+  const { token, isInitialized } = useAppSelector((state) => state.auth);
+
+  useEffect(() => {
+    if (token && !isInitialized) {
+      fetchCurrentUser().catch((err) => {
+        console.error('Failed to bootstrap user session:', err);
+      });
+    }
+  }, [token, isInitialized, fetchCurrentUser]);
+
   // Bootstrap global user profile and learning progress states from the database
   useProfile();
   useLearning();
