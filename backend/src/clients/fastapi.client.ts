@@ -289,22 +289,36 @@ export class FastApiClient implements IFastApiClient {
     logger.info(`Sending Recommendations Request to FastAPI | reqId: ${requestId}`);
 
     try {
-      const response = await this.executeWithRetry(async () => {
-        return this.client.post('/api/v1/study-plan/recommendations', {
-          profile,
-          progress,
-          mistakes,
-          vocab
-        }, {
-          headers: this.getHeaders(requestId, userId),
-        });
+      // No retry: the AI Gateway already has its own service-level fallback for
+      // LLM failures. Retrying here only compounds latency and increases the
+      // chance of cascading 502s reaching the frontend.
+      const response = await this.client.post('/api/v1/study-plan/recommendations', {
+        profile,
+        progress,
+        mistakes,
+        vocab
+      }, {
+        headers: this.getHeaders(requestId, userId),
       });
 
       const latency = Date.now() - startTime;
       logger.info(`FastAPI Recommendations Success | latency: ${latency}ms | status: ${response.status}`);
       return response.data.data;
-    } catch (error) {
-      this.handleError(error);
+    } catch (error: any) {
+      const latency = Date.now() - startTime;
+      const status = error?.response?.status;
+      const message = error?.response?.data?.error?.message || error?.message || 'unknown';
+      logger.error(
+        `FastAPI Recommendations Failed | latency: ${latency}ms | status: ${status} | message: ${message}`
+      );
+
+      // Return a backend-level fallback so the frontend always receives a
+      // usable recommendations object rather than a 502.
+      return {
+        focus: 'Daily Grammar & Conversation Focus',
+        reason: "Let's work on conversation fluency and review common grammar topics.",
+        vocabulary: ['Practice', 'Communicate', 'Fluency', 'Grammar', 'Vocabulary'],
+      };
     }
   }
 

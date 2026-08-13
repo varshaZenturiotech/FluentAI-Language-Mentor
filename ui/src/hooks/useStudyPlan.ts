@@ -1,28 +1,50 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAppSelector } from '../store';
 import { studyPlanApi } from '../api/study-plan.api';
+
+// Stale time of 60 seconds prevents duplicate requests when DashboardPage and
+// StudyPlanPage both call useStudyPlan() in the same browsing session.
+const STALE_TIME_MS = 60 * 1000;
 
 export const useStudyPlan = () => {
   const queryClient = useQueryClient();
+  const { isAuthenticated, isInitialized } = useAppSelector((state) => state.auth);
+
+  // Guard: queries must not fire until the session has been restored.
+  const isReady = isInitialized && isAuthenticated;
 
   const studyPlanQuery = useQuery({
     queryKey: ['studyPlan'],
     queryFn: studyPlanApi.getStudyPlan,
+    enabled: isReady,
+    staleTime: STALE_TIME_MS,
     retry: false,
   });
 
   const progressQuery = useQuery({
     queryKey: ['learningProgress'],
     queryFn: studyPlanApi.getProgress,
+    enabled: isReady,
+    staleTime: STALE_TIME_MS,
+    retry: 1,
   });
 
   const recommendationsQuery = useQuery({
     queryKey: ['aiRecommendations'],
     queryFn: studyPlanApi.getRecommendations,
+    enabled: isReady,
+    staleTime: STALE_TIME_MS,
+    // Do not retry on failure — the AI Gateway call is expensive and the
+    // service-level fallback in the gateway already handles provider errors.
+    retry: false,
   });
 
   const dashboardQuery = useQuery({
     queryKey: ['dashboardData'],
     queryFn: studyPlanApi.getDashboard,
+    enabled: isReady,
+    staleTime: STALE_TIME_MS,
+    retry: 1,
   });
 
   const generatePlanMutation = useMutation({
