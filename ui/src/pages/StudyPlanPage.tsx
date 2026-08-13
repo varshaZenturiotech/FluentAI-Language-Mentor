@@ -242,18 +242,28 @@ export const StudyPlanPage: React.FC = () => {
     return 'LOCKED';
   };
 
-  // Navigate tasks to modules
-  const handleTaskStart = async (taskType: string, dayId: string, isTaskComplete: boolean) => {
+  // Track which day is currently being started so individual buttons show a loading state.
+  const [startingDayId, setStartingDayId] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // Navigate tasks to the AI Conversation module.
+  // The backend always creates a ConversationSession for every lesson type,
+  // so every task type navigates to /conversation with sessionId + dayId.
+  const handleTaskStart = async (taskType: string, dayId: string, _isTaskComplete: boolean) => {
+    setStartingDayId(dayId);
+    setStartError(null);
     try {
       const result = await startLesson(dayId);
-      const sessionId = result.conversationSession.id;
-      if (taskType.toLowerCase() === 'conversation' || taskType.toLowerCase() === 'pronunciation' || taskType.toLowerCase() === 'listening') {
-        navigate(`/conversation?sessionId=${sessionId}&dayId=${dayId}`);
-      } else {
-        navigate('/study-plan');
+      const sessionId = result?.conversationSession?.id;
+      if (!sessionId) {
+        throw new Error('Could not retrieve a conversation session from the server.');
       }
-    } catch (err) {
+      navigate(`/conversation?sessionId=${sessionId}&dayId=${dayId}&lessonType=${encodeURIComponent(taskType)}`);
+    } catch (err: any) {
       console.error('Failed to start lesson:', err);
+      setStartError(err?.message || 'Failed to start the lesson. Please try again.');
+    } finally {
+      setStartingDayId(null);
     }
   };
 
@@ -292,6 +302,16 @@ export const StudyPlanPage: React.FC = () => {
 
   return (
     <div className="space-y-8 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      {/* Lesson start error banner */}
+      {startError && (
+        <div className="flex items-center gap-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl px-4 py-3 text-sm font-semibold shadow-sm">
+          <span className="shrink-0">⚠️</span>
+          <span>{startError}</span>
+          <button onClick={() => setStartError(null)} className="ml-auto text-rose-400 hover:text-rose-600 font-bold text-xs">✕</button>
+        </div>
+      )}
+
       {/* ================= HERO SECTION ================= */}
       <div className="gradient-bg rounded-[32px] p-6 sm:p-8 text-white shadow-xl shadow-indigo-500/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl pointer-events-none" />
@@ -623,6 +643,8 @@ export const StudyPlanPage: React.FC = () => {
                                             size="sm"
                                             variant={isTaskCompleted ? 'secondary' : 'primary'}
                                             onClick={() => handleTaskStart(task.type, day.id, isTaskCompleted)}
+                                            isLoading={startingDayId === day.id}
+                                            disabled={startingDayId === day.id}
                                             className="text-[10px] py-1 px-3.5 font-bold flex items-center gap-1"
                                           >
                                             {isTaskCompleted ? (
