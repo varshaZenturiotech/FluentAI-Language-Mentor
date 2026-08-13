@@ -19,6 +19,7 @@ export const useConversation = () => {
   // Load conversation state from Redux
   const { currentSessionId, messages, activeTopic, isAiResponding, activeVocabulary, recentCorrections } =
     useAppSelector((state) => state.conversation);
+  const { isAuthenticated, isInitialized } = useAppSelector((state) => state.auth);
 
   // TanStack query to fetch all sessions
   const {
@@ -28,7 +29,7 @@ export const useConversation = () => {
   } = useQuery<ConversationSession[]>({
     queryKey: ['conversations'],
     queryFn: conversationApi.getSessions,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 

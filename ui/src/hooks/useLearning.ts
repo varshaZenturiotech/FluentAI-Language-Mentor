@@ -20,47 +20,48 @@ export const useLearning = () => {
 
   // Retrieve current Redux learning state (handles backwards-compatibility with state.progress)
   const learningState = useAppSelector((state) => state.learning);
+  const { isAuthenticated, isInitialized } = useAppSelector((state) => state.auth);
 
   // Queries
   const { data: todayXpData, isLoading: isLoadingXp } = useQuery<{ xp: number }>({
     queryKey: ['today-xp'],
     queryFn: learningApi.getTodayXp,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 
   const { data: vocabData, isLoading: isLoadingVocab } = useQuery<VocabularyItem[]>({
     queryKey: ['vocabulary'],
     queryFn: learningApi.getVocabulary,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 
   const { data: grammarData, isLoading: isLoadingGrammar } = useQuery<GrammarCorrection[]>({
     queryKey: ['grammar-mistakes'],
     queryFn: learningApi.getGrammarMistakes,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 
   const { data: lessonsData, isLoading: isLoadingLessons } = useQuery<Lesson[]>({
     queryKey: ['lessons'],
     queryFn: learningApi.getLessons,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 
   const { data: progressLogsData, isLoading: isLoadingProgress } = useQuery<ProgressLog[]>({
     queryKey: ['progress-logs'],
     queryFn: learningApi.getProgress,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 
   const { data: achievementsData, isLoading: isLoadingAchievements } = useQuery<Achievement[]>({
     queryKey: ['achievements'],
     queryFn: learningApi.getAchievements,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 

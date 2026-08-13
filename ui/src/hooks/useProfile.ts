@@ -11,6 +11,7 @@ export const useProfile = () => {
 
   // Retrieve current Redux profile state (handles backwards-compatibility with state.user)
   const profileState = useAppSelector((state) => state.profile);
+  const { isAuthenticated, isInitialized } = useAppSelector((state) => state.auth);
 
   // TanStack Query for profile caching
   const {
@@ -21,7 +22,7 @@ export const useProfile = () => {
   } = useQuery<UserProfile>({
     queryKey: ['profile'],
     queryFn: profileApi.getProfile,
-    enabled: !!localStorage.getItem('accessToken'),
+    enabled: isInitialized && isAuthenticated,
     retry: 1,
   });
 
