@@ -7,12 +7,13 @@ import { VoiceStatusPanel } from '../components/conversation/VoiceStatusPanel';
 import { ChatBubble } from '../components/conversation/ChatBubble';
 import { MessageInput } from '../components/conversation/MessageInput';
 import { MentorCanvas3D } from '../components/3d/MentorCanvas3D';
-import { addMessage, setActiveTopic, setSessionId, setMessages } from '../store/conversationSlice';
+import { addMessage, setActiveTopic, setSessionId, setMessages, setIsAiResponding } from '../store/conversationSlice';
 import { Button } from '../components/common/Button';
 import { CONVERSATION_TOPICS } from '../utils/constants';
 import { conversationApi } from '../api/conversation.api';
+import { aiApi } from '../api/ai.api';
 import { learningApi } from '../api/learning.api';
-import { Sparkles, MessageSquare, Box, RefreshCw, Volume2, ShieldCheck } from 'lucide-react';
+import { Sparkles, MessageSquare, Box, RefreshCw, Volume2, ShieldCheck, AlertCircle } from 'lucide-react';
 
 export const ConversationPage: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -40,6 +41,10 @@ export const ConversationPage: React.FC = () => {
   const [summaryData, setSummaryData] = useState<any>(null);
   const [isEnding, setIsEnding] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [initError, setInitError] = useState<string | null>(null);
+
+  const isInitializingRef = useRef(false);
+  const lastInitializedSessionIdRef = useRef<string | null>(null);
 
   const {
     micState,
@@ -50,24 +55,97 @@ export const ConversationPage: React.FC = () => {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Load existing messages when sessionId changes
+  // Load existing messages or automatically initialize AI lesson greeting
   useEffect(() => {
+    let isMounted = true;
+
     const initSession = async () => {
       const activeSessionId = querySessionId || stateSessionId;
-      if (activeSessionId) {
-        if (querySessionId) {
-          dispatch(setSessionId(querySessionId));
-        }
-        try {
-          const fetchedMessages = await conversationApi.getMessages(activeSessionId);
+      if (!activeSessionId) return;
+
+      if (querySessionId) {
+        dispatch(setSessionId(querySessionId));
+      }
+
+      // Reset initialization flag when switching to a different session
+      if (lastInitializedSessionIdRef.current !== activeSessionId) {
+        isInitializingRef.current = false;
+        lastInitializedSessionIdRef.current = activeSessionId;
+      }
+
+      try {
+        setInitError(null);
+        console.log(`[CONVERSATION_INIT] Fetching messages for sessionId: ${activeSessionId}`);
+        const fetchedMessages = await conversationApi.getMessages(activeSessionId);
+
+        if (!isMounted) return;
+
+        if (fetchedMessages.length > 0) {
+          console.log(`[CONVERSATION_INIT] Loaded ${fetchedMessages.length} existing messages`);
           dispatch(setMessages(fetchedMessages));
-        } catch (err) {
-          console.error('Failed to load session messages:', err);
+          return;
+        }
+
+        // No existing messages -> initialize AI lesson greeting
+        if (isInitializingRef.current) {
+          console.log(`[CONVERSATION_INIT] Initialization already in progress for ${activeSessionId}, skipping`);
+          return;
+        }
+        isInitializingRef.current = true;
+
+        console.log(`[CONVERSATION_INIT] No existing messages. Generating AI opening greeting for task: ${lessonTaskName || lessonTaskType || 'Lesson'}`);
+        dispatch(setIsAiResponding(true));
+
+        try {
+          const chatResult = await aiApi.chat({
+            sessionId: activeSessionId,
+            message: 'Hello! I am ready to start my lesson.',
+            language: 'en',
+          });
+          console.log(`[CONVERSATION_INIT] Initial AI message received:`, chatResult.reply);
+
+          if (!isMounted) return;
+
+          // Re-fetch messages from backend so user trigger + AI assistant reply are synced
+          const updatedMessages = await conversationApi.getMessages(activeSessionId);
+          if (updatedMessages.length > 0) {
+            dispatch(setMessages(updatedMessages));
+          } else {
+            // Fallback if getMessages returns empty
+            dispatch(
+              addMessage({
+                id: crypto.randomUUID(),
+                sender: 'ai',
+                text: chatResult.reply,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              })
+            );
+          }
+          console.log(`[CONVERSATION_INIT] Initialization complete`);
+        } catch (chatErr: any) {
+          console.error('[CONVERSATION_INIT] Failed to generate initial AI greeting:', chatErr);
+          if (isMounted) {
+            setInitError(chatErr.message || 'Failed to generate initial AI greeting.');
+          }
+        } finally {
+          if (isMounted) {
+            dispatch(setIsAiResponding(false));
+          }
+        }
+      } catch (err: any) {
+        console.error('[CONVERSATION_INIT] Failed to load session messages:', err);
+        if (isMounted) {
+          setInitError(err.message || 'Failed to load session messages.');
         }
       }
     };
+
     initSession();
-  }, [querySessionId, stateSessionId, dispatch]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [querySessionId, stateSessionId, dispatch, lessonTaskName, lessonTaskType]);
 
   // Auto-scroll chat panel to bottom on new message
   useEffect(() => {
@@ -278,6 +356,40 @@ export const ConversationPage: React.FC = () => {
             
             {/* Conversation Feed Scroll Area */}
             <div className="flex-1 overflow-y-auto pr-2 space-y-4 scroll-smooth">
+              {/* Initialization Error Banner with Retry button */}
+              {initError && (
+                <div className="p-4 mb-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-xs font-semibold flex items-center justify-between gap-3 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>{initError}</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      isInitializingRef.current = false;
+                      lastInitializedSessionIdRef.current = null;
+                      setInitError(null);
+                      const activeSessionId = querySessionId || stateSessionId;
+                      if (activeSessionId) {
+                        dispatch(setIsAiResponding(true));
+                        aiApi
+                          .chat({
+                            sessionId: activeSessionId,
+                            message: 'Hello! I am ready to start my lesson.',
+                            language: 'en',
+                          })
+                          .then(() => conversationApi.getMessages(activeSessionId))
+                          .then((msgs) => dispatch(setMessages(msgs)))
+                          .catch((err) => setInitError(err.message || 'Retry failed.'))
+                          .finally(() => dispatch(setIsAiResponding(false)));
+                      }
+                    }}
+                    className="px-3 py-1 bg-rose-600 text-white text-xs font-bold rounded-xl hover:bg-rose-700 transition-colors shrink-0"
+                  >
+                    Retry Lesson Init
+                  </button>
+                </div>
+              )}
+
               {messages.map((message) => (
                 <ChatBubble key={message.id} message={message} />
               ))}
