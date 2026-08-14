@@ -484,6 +484,127 @@ export class StudyPlanService {
     };
   }
 
+  async assembleLearnerContext(userId: string, day: any) {
+    const profile = await prisma.learningProfile.findUnique({
+      where: { userId },
+      include: { goals: true, interests: true },
+    });
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { nativeLanguage: true, learningLanguage: true, level: true },
+    });
+
+    const baseline = await prisma.learnerAssessment.findUnique({
+      where: { userId },
+    });
+
+    const progress = await prisma.learningProgress.findUnique({
+      where: { userId },
+    });
+
+    const studyPlan = await prisma.studyPlan.findFirst({
+      where: { userId, id: day.studyPlanId },
+    });
+
+    const weakTopicsDb = await prisma.weakTopic.findMany({
+      where: { userId, status: 'active' },
+      select: { topic: true },
+      take: 10,
+    });
+
+    const recentVocabDb = await prisma.vocabularyProgress.findMany({
+      where: { userId },
+      orderBy: { lastReviewed: 'desc' },
+      select: { word: true, status: true },
+      take: 10,
+    });
+
+    const mistakesDb = await prisma.grammarMistake.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+
+    const prevSession = await prisma.learningSession.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const weekNumber = Math.ceil(day.dayNumber / 7);
+
+    const learnerProfile = profile ? {
+      nativeLanguage: profile.nativeLanguage || user?.nativeLanguage || 'ml',
+      ageGroup: profile.ageGroup,
+      occupation: profile.occupation,
+      englishLevel: profile.englishLevel || user?.level || 'BEGINNER',
+      goals: profile.goals.map((g: any) => g.goal),
+      interests: profile.interests.map((i: any) => i.interest),
+      dailyGoal: profile.dailyLearningGoal,
+    } : null;
+
+    const baselineData = baseline ? {
+      actualLevel: baseline.actualLevel,
+      grammar: baseline.actualGrammar || baseline.grammar,
+      vocabulary: baseline.actualVocabulary || baseline.vocabulary,
+      speaking: baseline.actualSpeaking || baseline.speaking,
+      listening: baseline.actualListening || baseline.listening,
+      pronunciation: baseline.actualPronunciation || baseline.pronunciation,
+      reading: baseline.actualReading || baseline.reading,
+      writing: baseline.actualWriting || baseline.writing,
+      actualStrengths: baseline.actualStrengths,
+      actualWeaknesses: baseline.actualWeaknesses,
+    } : null;
+
+    const lessonContext = {
+      studyPlanId: day.studyPlanId,
+      weekNumber,
+      dayNumber: day.dayNumber,
+      dayId: day.id,
+      title: day.title,
+      lessonType: day.lessonType,
+      lessonContent: day.lessonContent,
+      estimatedMinutes: day.estimatedMinutes || 15,
+      objectives: [day.lessonContent],
+    };
+
+    const studyPlanData = studyPlan ? {
+      title: studyPlan.title,
+      description: studyPlan.description,
+      durationWeeks: studyPlan.durationWeeks,
+      currentWeek: weekNumber,
+      currentDay: day.dayNumber,
+    } : null;
+
+    const progressData = progress ? {
+      lessonsCompleted: progress.lessonsCompleted,
+      conversationsCompleted: progress.conversationsCompleted,
+      streak: progress.streak,
+      overallProgress: progress.completionPercentage,
+      currentLevel: progress.currentLevel,
+    } : null;
+
+    const learningMemory = {
+      weakTopics: weakTopicsDb.map((t) => t.topic),
+      vocabulary: recentVocabDb.map((v) => ({ word: v.word, status: v.status })),
+      previousMistakes: mistakesDb.map((m) => ({
+        original: m.sentence,
+        corrected: m.correctSentence,
+        explanation: m.explanation,
+      })),
+      recentSessionSummary: prevSession ? prevSession.recommendations : 'First lesson session',
+    };
+
+    return {
+      learnerProfile,
+      baseline: baselineData,
+      lessonContext,
+      studyPlan: studyPlanData,
+      progress: progressData,
+      learningMemory,
+    };
+  }
+
   async startLessonSession(userId: string, dayId: string) {
     const day = await this.repository.findDayById(dayId);
     if (!day) {
@@ -566,59 +687,39 @@ export class StudyPlanService {
     // 4. Generate initial AI greeting if no ASSISTANT message exists
     if (!initialMessage) {
       logger.info(
-        `[LESSON_INIT_AI_REQUEST] Generating initial AI greeting | sessionId: ${conversationSession.id} | dayId: ${day.id} | taskType: ${day.lessonType}`
+        `[LESSON_INIT] Assembling context and requesting initial AI mentor message | sessionId: ${conversationSession.id} | dayId: ${day.id} | userId: ${userId}`
       );
 
-      const profile = await prisma.learningProfile.findUnique({
-        where: { userId },
-        include: { goals: true, interests: true },
-      });
+      const learnerContext = await this.assembleLearnerContext(userId, day);
 
-      const learnerProfile = profile ? {
-        nativeLanguage: profile.nativeLanguage,
-        ageGroup: profile.ageGroup,
-        occupation: profile.occupation,
-        englishLevel: profile.englishLevel,
-        goals: profile.goals.map((g: any) => g.goal),
-        interests: profile.interests.map((i: any) => i.interest),
-        dailyGoal: profile.dailyLearningGoal,
-      } : null;
-
-      const lessonContext = {
-        studyPlanId: day.studyPlanId,
-        weekId: `${day.studyPlanId}-week-${weekId}`,
-        dayId: day.id,
-        lessonId: day.id,
-        title: day.title,
-        objectives: [day.lessonContent],
-        lessonType: day.lessonType.toLowerCase(),
-        difficulty: (user?.level ?? 'BEGINNER').toLowerCase(),
-        estimatedMinutes: day.estimatedMinutes || 20,
-      };
+      logger.info(
+        `[LESSON_CONTEXT] Context loaded | profile: ${!!learnerContext.learnerProfile} | baseline: ${!!learnerContext.baseline} | plan: ${!!learnerContext.studyPlan} | memory: ${!!learnerContext.learningMemory}`
+      );
 
       let aiGreetingText = '';
 
       try {
-        const chatPayload = {
+        const initPayload = {
           sessionId: conversationSession.id,
-          message: 'Hello! I am ready to start my lesson.',
           language: user?.learningLanguage ?? 'en',
-          history: [],
-          lessonContext,
-          learnerProfile,
+          ...learnerContext,
         };
 
-        const result = await this.client.chat(chatPayload as any, undefined, userId);
+        logger.info(
+          `[LESSON_AI_INIT] Requesting initial mentor message from AI Gateway | sessionId: ${conversationSession.id}`
+        );
+        const result = await this.client.initLesson(initPayload, undefined, userId);
+
         if (result && result.reply) {
           aiGreetingText = result.reply;
           logger.info(
-            `[LESSON_INIT_AI_SUCCESS] Successfully generated AI greeting | sessionId: ${conversationSession.id}`
+            `[LESSON_AI_INIT_SUCCESS] Successfully generated initial AI mentor message | sessionId: ${conversationSession.id}`
           );
         }
       } catch (err: any) {
         isFallback = true;
         logger.warn(
-          `[LESSON_INIT_FALLBACK] AI generation failed or rate limited (${err.message}). Using safe lesson fallback greeting | sessionId: ${conversationSession.id}`
+          `[LESSON_AI_INIT_FAILED] AI lesson init failed (${err.message}). Using safe lesson fallback greeting | sessionId: ${conversationSession.id}`
         );
         aiGreetingText = getLessonFallbackGreeting(day);
       }

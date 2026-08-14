@@ -134,6 +134,31 @@ export class FastApiClient implements IFastApiClient {
     }
   }
 
+  async initLesson(
+    payload: any,
+    requestId?: string,
+    userId?: string
+  ): Promise<ChatResponsePayload> {
+    const startTime = Date.now();
+    logger.info(
+      `Sending Lesson Init Request to FastAPI | sessionId: ${payload.sessionId} | reqId: ${requestId}`
+    );
+
+    try {
+      const response = await this.executeWithRetry(async () => {
+        return this.client.post('/api/v1/chat/lesson-init', payload, {
+          headers: this.getHeaders(requestId, userId),
+        });
+      });
+
+      const latency = Date.now() - startTime;
+      logger.info(`FastAPI Lesson Init Success | latency: ${latency}ms | status: ${response.status}`);
+      return response.data.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
   async translate(
     payload: TranslateRequestPayload,
     requestId?: string,

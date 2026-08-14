@@ -13,6 +13,7 @@ import { CONVERSATION_TOPICS } from '../utils/constants';
 import { conversationApi } from '../api/conversation.api';
 import { aiApi } from '../api/ai.api';
 import { learningApi } from '../api/learning.api';
+import { studyPlanApi } from '../api/study-plan.api';
 import { Sparkles, MessageSquare, Box, RefreshCw, Volume2, ShieldCheck, AlertCircle } from 'lucide-react';
 
 export const ConversationPage: React.FC = () => {
@@ -86,50 +87,29 @@ export const ConversationPage: React.FC = () => {
           return;
         }
 
-        // No existing messages -> initialize AI lesson greeting
-        if (isInitializingRef.current) {
-          console.log(`[CONVERSATION_INIT] Initialization already in progress for ${activeSessionId}, skipping`);
-          return;
-        }
-        isInitializingRef.current = true;
+        // If no existing messages, call backend startLesson to trigger AI-initiated greeting
+        if (queryDayId && !isInitializingRef.current) {
+          isInitializingRef.current = true;
+          console.log(`[CONVERSATION_INIT] Initializing AI lesson session for dayId: ${queryDayId}`);
+          dispatch(setIsAiResponding(true));
 
-        console.log(`[CONVERSATION_INIT] No existing messages. Generating AI opening greeting for task: ${lessonTaskName || lessonTaskType || 'Lesson'}`);
-        dispatch(setIsAiResponding(true));
+          try {
+            await studyPlanApi.startLesson(queryDayId);
+            if (!isMounted) return;
 
-        try {
-          const chatResult = await aiApi.chat({
-            sessionId: activeSessionId,
-            message: 'Hello! I am ready to start my lesson.',
-            language: 'en',
-          });
-          console.log(`[CONVERSATION_INIT] Initial AI message received:`, chatResult.reply);
-
-          if (!isMounted) return;
-
-          // Re-fetch messages from backend so user trigger + AI assistant reply are synced
-          const updatedMessages = await conversationApi.getMessages(activeSessionId);
-          if (updatedMessages.length > 0) {
-            dispatch(setMessages(updatedMessages));
-          } else {
-            // Fallback if getMessages returns empty
-            dispatch(
-              addMessage({
-                id: crypto.randomUUID(),
-                sender: 'ai',
-                text: chatResult.reply,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              })
-            );
-          }
-          console.log(`[CONVERSATION_INIT] Initialization complete`);
-        } catch (chatErr: any) {
-          console.error('[CONVERSATION_INIT] Failed to generate initial AI greeting:', chatErr);
-          if (isMounted) {
-            setInitError(chatErr.message || 'Failed to generate initial AI greeting.');
-          }
-        } finally {
-          if (isMounted) {
-            dispatch(setIsAiResponding(false));
+            const updatedMessages = await conversationApi.getMessages(activeSessionId);
+            if (updatedMessages.length > 0) {
+              dispatch(setMessages(updatedMessages));
+            }
+          } catch (initErr: any) {
+            console.error('[CONVERSATION_INIT] Failed to initialize lesson session:', initErr);
+            if (isMounted) {
+              setInitError(initErr.message || 'Failed to initialize lesson session.');
+            }
+          } finally {
+            if (isMounted) {
+              dispatch(setIsAiResponding(false));
+            }
           }
         }
       } catch (err: any) {

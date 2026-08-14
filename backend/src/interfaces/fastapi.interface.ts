@@ -16,6 +16,11 @@ export interface IFastApiClient {
     requestId?: string,
     userId?: string
   ): Promise<ChatResponsePayload>;
+  initLesson(
+    payload: any,
+    requestId?: string,
+    userId?: string
+  ): Promise<ChatResponsePayload>;
   translate(
     payload: TranslateRequestPayload,
     requestId?: string,

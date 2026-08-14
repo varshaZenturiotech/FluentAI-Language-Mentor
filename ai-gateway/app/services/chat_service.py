@@ -1,13 +1,13 @@
 import logging
 import os
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatRequest, ChatResponse, LessonInitRequest
 from app.providers.groq_provider import GroqProvider
 from app.core.exceptions import LLMProviderException
 
 logger = logging.getLogger("app.services.chat_service")
 
 class ChatService:
-    """Business logic service for managing AI Mentor chat completions.
+    """Business logic service for managing AI Mentor chat completions and lesson initialization.
     Excludes any FastAPI web layer concerns.
     """
     
@@ -38,9 +38,127 @@ class ChatService:
             logger.critical(f"Failed to read prompt file {filename}: {str(e)}")
             raise
 
+    def _format_context_blocks(
+        self,
+        learner_profile: dict | None,
+        lesson_context: dict | None,
+        learning_memory: dict | None,
+        baseline: dict | None = None,
+        study_plan: dict | None = None,
+        progress: dict | None = None,
+    ) -> list[str]:
+        """Utility to format all available learner context blocks for system prompts."""
+        blocks = []
+
+        # 1. Learner Profile
+        if learner_profile:
+            p = learner_profile
+            goals_list = "\n".join([f"- {g}" for g in p.get("goals", [])]) if isinstance(p.get("goals"), list) else ""
+            interests_list = "\n".join([f"- {i}" for i in p.get("interests", [])]) if isinstance(p.get("interests"), list) else ""
+            profile_str = f"""
+### LEARNER PROFILE:
+- **Native Language**: {p.get('nativeLanguage', 'Malayalam')}
+- **Age Group**: {p.get('ageGroup', 'Unknown')}
+- **Occupation**: {p.get('occupation', 'Unknown')}
+- **English Level**: {p.get('englishLevel', 'Intermediate')}
+- **Learning Goals**:
+{goals_list if goals_list else '- None'}
+- **Interests**:
+{interests_list if interests_list else '- None'}
+- **Daily Learning Goal**: {p.get('dailyGoal', p.get('dailyLearningGoal', 15))} minutes
+"""
+            blocks.append(profile_str.strip())
+
+        # 2. Baseline Assessment
+        if baseline:
+            b = baseline
+            base_str = f"""
+### BASELINE ASSESSMENT RESULTS:
+- **Overall Level**: {b.get('actualLevel', b.get('level', 'Beginner'))}
+- **Grammar Score**: {b.get('grammar', b.get('actualGrammar', 50))}%
+- **Vocabulary Score**: {b.get('vocabulary', b.get('actualVocabulary', 50))}%
+- **Speaking Score**: {b.get('speaking', b.get('actualSpeaking', 50))}%
+- **Listening Score**: {b.get('listening', b.get('actualListening', 50))}%
+- **Pronunciation Score**: {b.get('pronunciation', b.get('actualPronunciation', 50))}%
+- **Strengths**: {b.get('actualStrengths', b.get('strengths', 'Eager to learn'))}
+- **Weaknesses**: {b.get('actualWeaknesses', b.get('weaknesses', 'Grammar accuracy'))}
+"""
+            blocks.append(base_str.strip())
+
+        # 3. Lesson Context / Study Plan
+        if lesson_context or study_plan:
+            lc = lesson_context or {}
+            sp = study_plan or {}
+            objectives_data = lc.get('objectives', sp.get('objectives', 'Practice speaking and listening'))
+            objectives_str = objectives_data if isinstance(objectives_data, str) else ", ".join(objectives_data) if isinstance(objectives_data, list) else str(objectives_data)
+            lesson_str = f"""
+### ACTIVE STUDY PLAN LESSON CONTEXT:
+- **Study Plan**: {sp.get('title', 'Adaptive English Curriculum')}
+- **Week**: {lc.get('weekNumber', sp.get('currentWeek', 1))} | **Day**: {lc.get('dayNumber', sp.get('currentDay', 1))}
+- **Lesson Title**: {lc.get('title', lc.get('lessonTitle', 'English Practice'))}
+- **Lesson Type**: {lc.get('lessonType', 'Conversation')}
+- **Lesson Content**: {lc.get('lessonContent', lc.get('description', 'Practice core communication.'))}
+- **Estimated Duration**: {lc.get('estimatedMinutes', 15)} minutes
+- **Objectives**: {objectives_str}
+"""
+            blocks.append(lesson_str.strip())
+
+        # 4. Progress
+        if progress:
+            pr = progress
+            prog_str = f"""
+### CURRENT LEARNER PROGRESS:
+- **Lessons Completed**: {pr.get('lessonsCompleted', 0)}
+- **Conversations Completed**: {pr.get('conversationsCompleted', 0)}
+- **Streak**: {pr.get('streak', 0)} days
+- **Overall Completion**: {pr.get('overallProgress', pr.get('completionPercentage', 0))}%
+- **Current Level**: {pr.get('currentLevel', 'BEGINNER')}
+"""
+            blocks.append(prog_str.strip())
+
+        # 5. Learning Memory
+        if learning_memory:
+            lm = learning_memory
+            weak_topics_str = "\n".join([f"- {t}" for t in lm.get("weakGrammarTopics", lm.get("weakTopics", []))]) if isinstance(lm.get("weakGrammarTopics", lm.get("weakTopics")), list) else ""
+            
+            vocab_list = lm.get("vocabulary", lm.get("recentVocab", []))
+            vocab_str = ""
+            if isinstance(vocab_list, list):
+                vocab_str = "\n".join([
+                    f"- {v['word']} ({v['status']})" if isinstance(v, dict) and 'status' in v
+                    else f"- {v['word']}" if isinstance(v, dict)
+                    else f"- {v}"
+                    for v in vocab_list
+                ])
+                
+            mistakes_list = lm.get("previousMistakes", lm.get("grammarMistakes", []))
+            mistakes_str = ""
+            if isinstance(mistakes_list, list):
+                mistakes_str = "\n".join([
+                    f"- Learned: '{m.get('original', m.get('sentence', ''))}' -> Correct: '{m.get('corrected', m.get('correctSentence', ''))}' ({m.get('explanation', '')})"
+                    if isinstance(m, dict) and (m.get('original') or m.get('sentence'))
+                    else f"- Correct: '{m.get('corrected', m.get('correctSentence', ''))}' ({m.get('explanation', '')})"
+                    if isinstance(m, dict)
+                    else f"- {m}"
+                    for m in mistakes_list
+                ])
+                
+            memory_str = f"""
+### LEARNING MEMORY & ANALYTICS:
+- **Weak Grammar Topics**:
+{weak_topics_str if weak_topics_str else '- None recorded yet'}
+- **Vocabulary currently learning/mastered**:
+{vocab_str if vocab_str else '- None recorded yet'}
+- **Previous Mistakes**:
+{mistakes_str if mistakes_str else '- None recorded yet'}
+- **Recent Session Summary**: {lm.get('recentSessionSummary', lm.get('prevSummary', 'No recent sessions'))}
+"""
+            blocks.append(memory_str.strip())
+
+        return blocks
+
     async def process_chat(self, request: ChatRequest, user_id: str = None) -> ChatResponse:
         """Coordinates system prompt loading, messages formatting, and querying the provider."""
-        # Load system base prompt and behaviors
         base_prompt = self._load_prompt_file("chat_system.txt")
         mentor_behavior = self._load_prompt_file("mentor_behavior.txt")
         correction_guidelines = self._load_prompt_file("correction_guidelines.txt")
@@ -55,112 +173,78 @@ class ChatService:
             lesson_behavior = self._load_prompt_file("lesson_behavior.txt")
             system_prompt_parts.append(lesson_behavior)
 
-        # 1. Format Learner Profile
-        profile_str = ""
-        profile_data = request.learnerProfile
-        if not profile_data and user_id:
-            try:
-                import httpx
-                from app.core.config import settings
-                
-                async with httpx.AsyncClient() as client:
-                    url = f"{settings.BACKEND_URL}/api/v1/learning-profile"
-                    headers = {
-                        "X-Internal-Key": settings.INTERNAL_API_KEY,
-                        "X-User-Id": user_id
-                    }
-                    response = await client.get(url, headers=headers, timeout=5.0)
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("success") and data.get("data"):
-                            res_data = data["data"]
-                            if res_data.get("onboardingCompleted") and res_data.get("profile"):
-                                profile_data = res_data["profile"]
-            except Exception as e:
-                logger.error(f"Error fetching learner profile for user {user_id}: {str(e)}")
-
-        if profile_data:
-            goals_list = "\n".join([f"- {g}" for g in profile_data.get("goals", [])]) if isinstance(profile_data.get("goals"), list) else ""
-            interests_list = "\n".join([f"- {i}" for i in profile_data.get("interests", [])]) if isinstance(profile_data.get("interests"), list) else ""
-            profile_str = f"""
-### LEARNER PROFILE:
-- **Native Language**: {profile_data.get('nativeLanguage', 'Malayalam')}
-- **Age Group**: {profile_data.get('ageGroup', 'Unknown')}
-- **Occupation**: {profile_data.get('occupation', 'Unknown')}
-- **English Level**: {profile_data.get('englishLevel', 'Intermediate')}
-- **Learning Goals**:
-{goals_list if goals_list else '- None'}
-- **Interests**:
-{interests_list if interests_list else '- None'}
-- **Daily Learning Goal**: {profile_data.get('dailyGoal', 15)} minutes
-"""
-            system_prompt_parts.append(profile_str.strip())
-
-        # 2. Format Lesson Context
-        if request.lessonContext:
-            lc = request.lessonContext
-            objectives_data = lc.get('objectives', 'Practice speaking and listening')
-            objectives_str = objectives_data if isinstance(objectives_data, str) else ", ".join(objectives_data) if isinstance(objectives_data, list) else str(objectives_data)
-            lesson_str = f"""
-### ACTIVE STUDY PLAN LESSON CONTEXT:
-- **Title**: {lc.get('title', 'English Lesson')}
-- **Lesson Type**: {lc.get('lessonType', 'Conversation')}
-- **Estimated Duration**: {lc.get('estimatedMinutes', 15)} minutes
-- **Difficulty Level**: {lc.get('difficulty', 'Beginner')}
-- **Objectives**: {objectives_str}
-"""
-            system_prompt_parts.append(lesson_str.strip())
-
-        # 3. Format Learning Memory
-        if request.learningMemory:
-            lm = request.learningMemory
-            
-            weak_topics_str = "\n".join([f"- {t}" for t in lm.get("weakGrammarTopics", [])]) if isinstance(lm.get("weakGrammarTopics"), list) else ""
-            
-            vocab_list = lm.get("vocabulary", [])
-            vocab_str = ""
-            if isinstance(vocab_list, list):
-                vocab_str = "\n".join([f"- {v.get('word')} ({v.get('status', 'new')})" for v in vocab_list if isinstance(v, dict)])
-                
-            mistakes_list = lm.get("previousMistakes", [])
-            mistakes_str = ""
-            if isinstance(mistakes_list, list):
-                mistakes_str = "\n".join([f"- Learned: '{m.get('original')}' -> Correct: '{m.get('corrected')}' ({m.get('explanation')})" for m in mistakes_list if isinstance(m, dict)])
-                
-            strengths_str = "\n".join([f"- {s}" for s in lm.get("strengths", [])]) if isinstance(lm.get("strengths"), list) else ""
-            
-            memory_str = f"""
-### LEARNING MEMORY & ANALYTICS:
-- **Weak Grammar Topics to practice/address**:
-{weak_topics_str if weak_topics_str else '- None recorded yet'}
-- **Vocabulary currently learning/mastered**:
-{vocab_str if vocab_str else '- None recorded yet'}
-- **Previous mistakes to watch out for**:
-{mistakes_str if mistakes_str else '- None recorded yet'}
-- **Current Strengths**:
-{strengths_str if strengths_str else '- None recorded yet'}
-- **Recent Session Summary**: {lm.get('recentSessionSummary', 'No recent sessions')}
-- **Current Fluency Score**: {lm.get('fluency', 70)}/100
-- **Current Confidence Score**: {lm.get('confidence', 70)}/100
-"""
-            system_prompt_parts.append(memory_str.strip())
+        # Context formatting
+        context_blocks = self._format_context_blocks(
+            learner_profile=request.learnerProfile,
+            lesson_context=request.lessonContext,
+            learning_memory=request.learningMemory,
+            baseline=request.baseline,
+            study_plan=request.studyPlan,
+            progress=request.progress
+        )
+        system_prompt_parts.extend(context_blocks)
 
         system_prompt = "\n\n".join(system_prompt_parts)
         
-        # Build user turn payload incorporating history if available
         messages = []
         if request.history:
             for msg in request.history:
                 role = "assistant" if msg.role.lower() == "assistant" else "user"
                 messages.append({"role": role, "content": msg.content})
 
-        # Append the new user message if it is not already the last item in history
         if not messages or messages[-1]["content"] != request.message:
             messages.append({"role": "user", "content": request.message})
         
         logger.debug(f"Processing chat session={request.sessionId} | language={request.language}")
         
-        # Execute chat completion via the Groq provider
+        reply_text = await self.provider.complete(
+            system_prompt=system_prompt,
+            messages=messages,
+            temperature=0.7
+        )
+
+        return ChatResponse(
+            reply=reply_text,
+            provider="groq",
+            model=self.provider.model
+        )
+
+    async def process_lesson_init(self, request: LessonInitRequest, user_id: str = None) -> ChatResponse:
+        """Generates the initial mentor message for a new study plan lesson using full learner context."""
+        base_prompt = self._load_prompt_file("chat_system.txt")
+        mentor_behavior = self._load_prompt_file("mentor_behavior.txt")
+        lesson_behavior = self._load_prompt_file("lesson_behavior.txt")
+        lesson_init_prompt = self._load_prompt_file("lesson_init_system.txt")
+
+        system_prompt_parts = [
+            base_prompt,
+            mentor_behavior,
+            lesson_behavior,
+            lesson_init_prompt,
+        ]
+
+        context_blocks = self._format_context_blocks(
+            learner_profile=request.learnerProfile,
+            lesson_context=request.lessonContext,
+            learning_memory=request.learningMemory,
+            baseline=request.baseline,
+            study_plan=request.studyPlan,
+            progress=request.progress
+        )
+        system_prompt_parts.extend(context_blocks)
+
+        system_prompt = "\n\n".join(system_prompt_parts)
+
+        # Single instruction message to trigger AI-initiated greeting
+        messages = [
+            {
+                "role": "user",
+                "content": "Please initialize today's lesson and generate your opening mentor message now."
+            }
+        ]
+
+        logger.info(f"Generating AI initial lesson greeting for session={request.sessionId}")
+        
         reply_text = await self.provider.complete(
             system_prompt=system_prompt,
             messages=messages,
