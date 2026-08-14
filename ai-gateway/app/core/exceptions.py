@@ -53,6 +53,11 @@ class RateLimitException(HTTPAppException):
         super().__init__(429, "RATE_LIMIT_EXCEEDED", message, details)
 
 
+class LLMRateLimitException(HTTPAppException):
+    def __init__(self, message: str = "AI provider rate limit reached. Please retry shortly.", details: dict | None = None):
+        super().__init__(429, "LLM_RATE_LIMITED", message, details)
+
+
 class LLMProviderException(HTTPAppException):
     def __init__(self, message: str = "LLM Provider Error", details: dict | None = None):
         super().__init__(502, "LLM_PROVIDER_ERROR", message, details)

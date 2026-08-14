@@ -13,6 +13,47 @@ export interface SkillPriority {
   priorityScore: number;
 }
 
+interface CachedRecommendation {
+  data: any;
+  timestamp: number;
+}
+
+const recommendationsCache = new Map<string, CachedRecommendation>();
+const pendingRecommendationsPromises = new Map<string, Promise<any>>();
+const RECOMMENDATIONS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+export function invalidateRecommendationsCache(userId: string) {
+  recommendationsCache.delete(userId);
+}
+
+export function getLessonFallbackGreeting(day: {
+  dayNumber: number;
+  title: string;
+  lessonType: string;
+  lessonContent: string;
+}): string {
+  const type = (day.lessonType || 'Vocabulary').toLowerCase();
+  const taskName = day.title || 'Practice Lesson';
+
+  if (type.includes('vocab')) {
+    return `Hi! 👋 Welcome to Day ${day.dayNumber} of your ${taskName} practice.\n\nToday we will learn key vocabulary for your target goals. Let's start with your first exercise:\n\n**Word**: *Collaborate*\n**Meaning**: To work together with others to achieve a common goal.\n\nCan you write a short sentence using the word **collaborate**?`;
+  }
+
+  if (type.includes('gramm')) {
+    return `Hi! 👋 Welcome to Day ${day.dayNumber} Grammar Practice: ${taskName}.\n\nToday we'll focus on forming clear, accurate sentences.\n\n**Quick Example**: "I have been working here for two years." (Present Perfect Continuous)\n\nCan you share one thing you have been practicing or learning recently?`;
+  }
+
+  if (type.includes('speak') || type.includes('accent') || type.includes('convers')) {
+    return `Hi! 👋 Welcome to Day ${day.dayNumber} Speaking Practice: ${taskName}.\n\nI'm your AI Language Mentor! Let's practice speaking naturally today.\n\nTo get started, tell me: What is your primary learning goal for this week?`;
+  }
+
+  if (type.includes('pronun')) {
+    return `Hi! 👋 Welcome to Day ${day.dayNumber} Pronunciation Practice: ${taskName}.\n\nWe will work on your accent, clarity, and word stress today.\n\nTry reading this sentence aloud or typing it: *"Clear communication creates great opportunities."*\n\nHow does that feel?`;
+  }
+
+  return `Hi! 👋 Welcome to Day ${day.dayNumber}: ${taskName}.\n\nI'm ready to guide you through today's practice: ${day.lessonContent}.\n\nLet's begin! What would you like to practice first?`;
+}
+
 export function calculateSkillPriorities(
   baseline: {
     grammar: number;
@@ -304,79 +345,119 @@ export class StudyPlanService {
   }
 
   async getRecommendations(userId: string) {
-    // 1. Fetch user's learning profile
-    const profile = await prisma.learningProfile.findUnique({
-      where: { userId },
-      include: {
-        goals: true,
-        interests: true,
-      },
-    });
+    const now = Date.now();
+    const cached = recommendationsCache.get(userId);
 
-    if (!profile) {
-      throw new ApiError(HttpStatusCodes.BAD_REQUEST, 'Learning profile not found. Please complete onboarding first.');
+    if (cached && now - cached.timestamp < RECOMMENDATIONS_CACHE_TTL_MS) {
+      logger.info(`[RECOMMENDATION_CACHE_HIT] Returning cached recommendations for userId: ${userId}`);
+      return cached.data;
     }
 
-    // 2. Fetch recent activity details
-    const [mistakes, vocabList, progress] = await Promise.all([
-      prisma.grammarMistake.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      }),
-      prisma.vocabulary.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-      }),
-      this.repository.getLearningProgress(userId),
-    ]);
+    if (pendingRecommendationsPromises.has(userId)) {
+      logger.info(`[RECOMMENDATION_REQUEST_COALESCED] Coalescing concurrent recommendation request for userId: ${userId}`);
+      return pendingRecommendationsPromises.get(userId)!;
+    }
 
-    // 3. Prepare payload for recommendations
-    const profilePayload = {
-      ageGroup: profile.ageGroup,
-      occupation: profile.occupation,
-      englishLevel: profile.englishLevel,
-      nativeLanguage: profile.nativeLanguage,
-      goals: profile.goals.map((g: any) => g.goal),
-      interests: profile.interests.map((i: any) => i.interest),
-      dailyLearningGoal: profile.dailyLearningGoal,
-    };
+    const fetchPromise = (async () => {
+      try {
+        const profile = await prisma.learningProfile.findUnique({
+          where: { userId },
+          include: { goals: true, interests: true },
+        });
 
-    const progressPayload = progress ? {
-      lessonsCompleted: progress.lessonsCompleted,
-      conversationsCompleted: progress.conversationsCompleted,
-      vocabularyLearned: progress.vocabularyLearned,
-      grammarTopicsCompleted: progress.grammarTopicsCompleted,
-      streak: progress.streak,
-      currentLevel: progress.currentLevel,
-    } : {};
+        if (!profile) {
+          throw new ApiError(HttpStatusCodes.BAD_REQUEST, 'Learning profile not found. Please complete onboarding first.');
+        }
 
-    const mistakesPayload = mistakes.map((m: any) => ({
-      sentence: m.sentence,
-      correctSentence: m.correctSentence,
-      explanation: m.explanation,
-    }));
+        const [mistakes, vocabList, progress] = await Promise.all([
+          prisma.grammarMistake.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+          }),
+          prisma.vocabulary.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+          }),
+          this.repository.getLearningProgress(userId),
+        ]);
 
-    const vocabPayload = vocabList.map((v: any) => v.word);
+        const profilePayload = {
+          ageGroup: profile.ageGroup,
+          occupation: profile.occupation,
+          englishLevel: profile.englishLevel,
+          nativeLanguage: profile.nativeLanguage,
+          goals: profile.goals.map((g: any) => g.goal),
+          interests: profile.interests.map((i: any) => i.interest),
+          dailyLearningGoal: profile.dailyLearningGoal,
+        };
 
-    // 4. Request recommendations from AI Gateway
-    const recs = await this.client.getRecommendations(
-      profilePayload,
-      progressPayload,
-      mistakesPayload,
-      vocabPayload,
-      undefined,
-      userId
-    );
+        const progressPayload = progress ? {
+          lessonsCompleted: progress.lessonsCompleted,
+          conversationsCompleted: progress.conversationsCompleted,
+          vocabularyLearned: progress.vocabularyLearned,
+          grammarTopicsCompleted: progress.grammarTopicsCompleted,
+          streak: progress.streak,
+          currentLevel: progress.currentLevel,
+        } : {};
 
-    return recs;
+        const mistakesPayload = mistakes.map((m: any) => ({
+          sentence: m.sentence,
+          correctSentence: m.correctSentence,
+          explanation: m.explanation,
+        }));
+
+        const vocabPayload = vocabList.map((v: any) => v.word);
+
+        logger.info(`[RECOMMENDATION_CACHE_MISS] Requesting AI recommendations for userId: ${userId}`);
+        const recs = await this.client.getRecommendations(
+          profilePayload,
+          progressPayload,
+          mistakesPayload,
+          vocabPayload,
+          undefined,
+          userId
+        );
+
+        recommendationsCache.set(userId, { data: recs, timestamp: Date.now() });
+        return recs;
+      } catch (err: any) {
+        logger.warn(`[RECOMMENDATION_FALLBACK] AI Recommendations failed (${err.message}). Using fallback recommendations.`);
+        if (cached) {
+          logger.info(`[RECOMMENDATION_CACHE_HIT] Returning stale cached recommendations for userId: ${userId}`);
+          return cached.data;
+        }
+        return {
+          study_plan_focus: 'Focus on daily vocabulary and workplace conversation practice.',
+          recommended_activities: [
+            {
+              title: 'Workplace Vocabulary',
+              type: 'vocabulary',
+              estimatedMinutes: 10,
+              reason: 'Build core business terminology',
+            },
+            {
+              title: 'Daily Speaking Challenge',
+              type: 'speaking',
+              estimatedMinutes: 15,
+              reason: 'Improve natural spoken fluency',
+            },
+          ],
+          daily_goals: ['Complete 1 lesson', 'Practice 5 new vocabulary words'],
+        };
+      } finally {
+        pendingRecommendationsPromises.delete(userId);
+      }
+    })();
+
+    pendingRecommendationsPromises.set(userId, fetchPromise);
+    return fetchPromise;
   }
 
   async getProgress(userId: string) {
     let progress = await this.repository.getLearningProgress(userId);
     if (!progress) {
-      // Create empty progress entry if not exists
       progress = await prisma.learningProgress.create({
         data: {
           userId,
@@ -473,40 +554,51 @@ export class StudyPlanService {
       });
     }
 
-    // 3. Generate initial AI greeting if the session has no messages
-    const messageCount = await prisma.message.count({
+    // 3. Find existing messages for this session
+    const existingMessages = await prisma.message.findMany({
       where: { sessionId: conversationSession.id },
+      orderBy: { createdAt: 'asc' },
     });
 
-    if (messageCount === 0) {
+    let initialMessage = existingMessages.find((m) => m.role === 'ASSISTANT') || null;
+    let isFallback = false;
+
+    // 4. Generate initial AI greeting if no ASSISTANT message exists
+    if (!initialMessage) {
+      logger.info(
+        `[LESSON_INIT_AI_REQUEST] Generating initial AI greeting | sessionId: ${conversationSession.id} | dayId: ${day.id} | taskType: ${day.lessonType}`
+      );
+
+      const profile = await prisma.learningProfile.findUnique({
+        where: { userId },
+        include: { goals: true, interests: true },
+      });
+
+      const learnerProfile = profile ? {
+        nativeLanguage: profile.nativeLanguage,
+        ageGroup: profile.ageGroup,
+        occupation: profile.occupation,
+        englishLevel: profile.englishLevel,
+        goals: profile.goals.map((g: any) => g.goal),
+        interests: profile.interests.map((i: any) => i.interest),
+        dailyGoal: profile.dailyLearningGoal,
+      } : null;
+
+      const lessonContext = {
+        studyPlanId: day.studyPlanId,
+        weekId: `${day.studyPlanId}-week-${weekId}`,
+        dayId: day.id,
+        lessonId: day.id,
+        title: day.title,
+        objectives: [day.lessonContent],
+        lessonType: day.lessonType.toLowerCase(),
+        difficulty: (user?.level ?? 'BEGINNER').toLowerCase(),
+        estimatedMinutes: day.estimatedMinutes || 20,
+      };
+
+      let aiGreetingText = '';
+
       try {
-        const profile = await prisma.learningProfile.findUnique({
-          where: { userId },
-          include: { goals: true, interests: true },
-        });
-
-        const learnerProfile = profile ? {
-          nativeLanguage: profile.nativeLanguage,
-          ageGroup: profile.ageGroup,
-          occupation: profile.occupation,
-          englishLevel: profile.englishLevel,
-          goals: profile.goals.map((g: any) => g.goal),
-          interests: profile.interests.map((i: any) => i.interest),
-          dailyGoal: profile.dailyLearningGoal,
-        } : null;
-
-        const lessonContext = {
-          studyPlanId: day.studyPlanId,
-          weekId: `${day.studyPlanId}-week-${weekId}`,
-          dayId: day.id,
-          lessonId: day.id,
-          title: day.title,
-          objectives: [day.lessonContent],
-          lessonType: day.lessonType.toLowerCase(),
-          difficulty: (user?.level ?? 'BEGINNER').toLowerCase(),
-          estimatedMinutes: day.estimatedMinutes || 20,
-        };
-
         const chatPayload = {
           sessionId: conversationSession.id,
           message: 'Hello! I am ready to start my lesson.',
@@ -516,34 +608,55 @@ export class StudyPlanService {
           learnerProfile,
         };
 
-        // Call the AI Gateway client directly
-        const initialResult = await this.client.chat(chatPayload as any, undefined, userId);
-
-        if (initialResult && initialResult.reply) {
-          await prisma.message.create({
-            data: {
-              sessionId: conversationSession.id,
-              role: 'ASSISTANT',
-              content: initialResult.reply,
-            },
-          });
-
-          await prisma.conversationSession.update({
-            where: { id: conversationSession.id },
-            data: {
-              lastMessageAt: new Date(),
-              totalMessages: 1,
-            },
-          });
+        const result = await this.client.chat(chatPayload as any, undefined, userId);
+        if (result && result.reply) {
+          aiGreetingText = result.reply;
+          logger.info(
+            `[LESSON_INIT_AI_SUCCESS] Successfully generated AI greeting | sessionId: ${conversationSession.id}`
+          );
         }
-      } catch (err) {
-        console.error('Failed to generate initial AI lesson message:', err);
+      } catch (err: any) {
+        isFallback = true;
+        logger.warn(
+          `[LESSON_INIT_FALLBACK] AI generation failed or rate limited (${err.message}). Using safe lesson fallback greeting | sessionId: ${conversationSession.id}`
+        );
+        aiGreetingText = getLessonFallbackGreeting(day);
       }
+
+      if (!aiGreetingText) {
+        isFallback = true;
+        aiGreetingText = getLessonFallbackGreeting(day);
+      }
+
+      // Persist initial ASSISTANT message in DB so conversation is guaranteed to be non-empty
+      const createdMessage = await prisma.message.create({
+        data: {
+          sessionId: conversationSession.id,
+          role: 'ASSISTANT',
+          content: aiGreetingText,
+        },
+      });
+
+      await prisma.conversationSession.update({
+        where: { id: conversationSession.id },
+        data: {
+          lastMessageAt: new Date(),
+          totalMessages: { increment: 1 },
+        },
+      });
+
+      initialMessage = createdMessage;
     }
 
     return {
       lessonSession,
       conversationSession,
+      initialMessage: initialMessage ? {
+        id: initialMessage.id,
+        role: 'ASSISTANT',
+        content: initialMessage.content,
+        isFallback,
+      } : null,
     };
   }
 }

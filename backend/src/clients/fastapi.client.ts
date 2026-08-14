@@ -32,21 +32,33 @@ export class FastApiClient implements IFastApiClient {
 
   private async executeWithRetry<T>(
     requestFn: () => Promise<T>,
-    retriesLeft = 2,
-    delayMs = 1000
+    retriesLeft = 1,
+    delayMs = 1500
   ): Promise<T> {
     try {
       return await requestFn();
     } catch (error: any) {
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      const errorCode = axios.isAxiosError(error) ? error.response?.data?.error?.code : undefined;
+
+      // DO NOT retry 429 rate limit errors or 4xx client errors
+      if (status === 429 || errorCode === 'LLM_RATE_LIMITED' || (status && status >= 400 && status < 500)) {
+        logger.warn(`[AI_RATE_LIMITED] Received ${status} from AI Gateway (${errorCode}). Skipping retry.`, {
+          status,
+          code: errorCode,
+        });
+        throw error;
+      }
+
       const isTransient =
         axios.isAxiosError(error) &&
-        ((error.response?.status && error.response.status >= 500) ||
+        ((status && status >= 500) ||
           error.code === 'ECONNABORTED' ||
           !error.response);
 
       if (isTransient && retriesLeft > 0) {
         logger.warn(
-          `FastAPI Client transient error encountered. Retrying in ${delayMs}ms... (${retriesLeft} attempts left)`,
+          `[AI_RETRY] FastAPI Client transient error ${status || error.code}. Retrying in ${delayMs}ms... (${retriesLeft} attempts left)`,
           {
             error: error.message,
           }

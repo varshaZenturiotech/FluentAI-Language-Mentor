@@ -3,7 +3,7 @@ import time
 from groq import AsyncGroq
 from app.core.config import settings
 from app.providers.base_provider import BaseProvider
-from app.core.exceptions import LLMProviderException, TimeoutException
+from app.core.exceptions import LLMProviderException, TimeoutException, LLMRateLimitException
 
 logger = logging.getLogger("app.providers.groq_provider")
 
@@ -85,8 +85,10 @@ class GroqProvider(BaseProvider):
             message = getattr(e, "message", str(e))
             
             request_id = None
+            retry_after = None
             if hasattr(e, "response") and hasattr(e.response, "headers"):
                 request_id = e.response.headers.get("x-request-id")
+                retry_after = e.response.headers.get("retry-after")
 
             # Log Error details and response time
             logger.error(
@@ -95,6 +97,22 @@ class GroqProvider(BaseProvider):
                 exc_info=True
             )
             
+            if status == 429 or "429" in str(e) or "rate limit" in str(e).lower() or "tokens per minute" in str(e).lower():
+                logger.warning(
+                    f"[AI_RATE_LIMITED] Groq Rate Limit Reached | status: 429 | "
+                    f"message: {message} | request_id: {request_id} | duration: {duration:.4f}s"
+                )
+                raise LLMRateLimitException(
+                    message=f"Groq rate limit exceeded: {message}",
+                    details={
+                        "provider": "groq",
+                        "status_code": 429,
+                        "error_message": message,
+                        "request_id": request_id,
+                        "retry_after": retry_after or 5
+                    }
+                )
+
             if "timeout" in str(e).lower() or "deadline" in str(e).lower():
                 raise TimeoutException("Groq completion request timed out.")
             
