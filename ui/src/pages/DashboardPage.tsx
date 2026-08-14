@@ -35,7 +35,6 @@ export const DashboardPage: React.FC = () => {
     isLoadingDashboard,
     generatePlan,
     isGeneratingPlan,
-    startLesson,
     completeDay,
     isCompletingDay,
     refetchDashboard
@@ -158,21 +157,11 @@ export const DashboardPage: React.FC = () => {
 
   const currentAvailableDay = studyPlan?.days?.find((d: any) => d.status === 'AVAILABLE');
 
-  // Handle support card navigations
-  const handleTaskClick = async (type?: string) => {
-    if (currentAvailableDay) {
-      try {
-        const result = await startLesson(currentAvailableDay.id);
-        const sessionId = result?.conversationSession?.id;
-        if (sessionId) {
-          navigate(`/conversation?sessionId=${sessionId}&dayId=${currentAvailableDay.id}`);
-          return;
-        }
-      } catch (err) {
-        console.error('Failed to start lesson from dashboard:', err);
-      }
-    }
-    navigate('/conversation');
+  // "Continue Week X" and task-card clicks both navigate to the Study Plan
+  // page, where the user clicks the explicit Start button. The lesson-session
+  // initiation (POST /study-plan/day/:id/start) happens there — not here.
+  const handleTaskClick = () => {
+    navigate('/study-plan');
   };
 
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -222,7 +211,7 @@ export const DashboardPage: React.FC = () => {
                 size="lg"
                 variant="glass"
                 className="w-full sm:w-auto font-black text-indigo-950 shadow-md py-4 px-8 text-base"
-                onClick={() => handleTaskClick(currentAvailableDay.lessonType)}
+                onClick={() => handleTaskClick()}
                 rightIcon={<ArrowRight className="w-5 h-5 text-indigo-700" />}
               >
                 Continue Week {greeting?.currentWeek}
@@ -269,7 +258,7 @@ export const DashboardPage: React.FC = () => {
                 return (
                   <div
                     key={task.id || index}
-                    onClick={() => handleTaskClick(task.lessonType)}
+                    onClick={() => handleTaskClick()}
                     className="glass-card glass-card-hover rounded-2xl p-5 flex flex-col justify-between space-y-4 cursor-pointer relative overflow-hidden"
                   >
                     <div className="space-y-2">
@@ -322,7 +311,7 @@ export const DashboardPage: React.FC = () => {
               {recommendedLessons.map((rec: any) => (
                 <div
                   key={rec.id}
-                  onClick={() => handleTaskClick(rec.lessonType)}
+                  onClick={() => handleTaskClick()}
                   className="glass-card glass-card-hover rounded-2xl p-5 flex items-start gap-4 cursor-pointer"
                 >
                   <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">

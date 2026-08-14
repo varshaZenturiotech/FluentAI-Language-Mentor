@@ -21,6 +21,15 @@ export const ConversationPage: React.FC = () => {
   const querySessionId = searchParams.get('sessionId');
   const queryDayId = searchParams.get('dayId');
 
+  // Lesson context passed from Study Plan when the user clicks Start on a lesson card.
+  const lessonTaskName = searchParams.get('taskName');
+  const lessonTaskType = searchParams.get('taskType');
+  const lessonDayNumber = searchParams.get('dayNumber');
+  const lessonDayTitle = searchParams.get('dayTitle');
+  const lessonWeekNumber = searchParams.get('weekNumber');
+  // Whether we arrived from an explicit Study-Plan lesson launch
+  const isStudyPlanLesson = !!(querySessionId && lessonDayTitle);
+
   const messages = useAppSelector((state) => state.conversation.messages);
   const activeTopic = useAppSelector((state) => state.conversation.activeTopic);
   const isAiResponding = useAppSelector((state) => state.conversation.isAiResponding);
@@ -117,6 +126,31 @@ export const ConversationPage: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-8">
+      
+      {/* Study-Plan Lesson Context Banner — shown when navigated from a lesson Start button */}
+      {isStudyPlanLesson && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 bg-indigo-50 border border-indigo-100 rounded-2xl shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-black text-xs shrink-0">
+              {lessonWeekNumber ? `W${lessonWeekNumber}` : 'AI'}
+            </div>
+            <div>
+              <p className="text-[10px] font-extrabold text-indigo-400 uppercase tracking-widest">
+                {lessonDayNumber ? `Day ${lessonDayNumber}` : 'Study Plan'} &nbsp;•&nbsp; {lessonTaskType || 'Lesson'}
+              </p>
+              <p className="text-sm font-black text-indigo-900 leading-tight">
+                {lessonTaskName || lessonDayTitle}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/study-plan')}
+            className="text-xs font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1 transition-colors"
+          >
+            ← Back to Study Plan
+          </button>
+        </div>
+      )}
       
       {/* Top Header & Topic Switcher */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 glass-card p-4 rounded-3xl border border-white/90 shadow-sm">
