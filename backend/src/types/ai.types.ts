@@ -12,6 +12,8 @@ export interface ChatResponsePayload {
   reply: string;
   provider: string;
   model: string;
+  lessonComplete?: boolean;
+  completedObjectives?: string[];
 }
 
 export interface TranslateRequestPayload {

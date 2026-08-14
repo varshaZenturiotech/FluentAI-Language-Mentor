@@ -15,6 +15,7 @@ import {
 } from '../types/ai.types';
 
 import { prisma } from '../database/prisma';
+import { learningMemoryService } from './learning-memory.service';
 
 export class AiService {
   private readonly client = fastApiClient;
@@ -108,6 +109,13 @@ export class AiService {
         orderBy: { createdAt: 'desc' },
       });
 
+      // Load objective mastery history
+      const masteries = await prisma.objectiveMastery.findMany({
+        where: { userId },
+        select: { objective: true, masteryScore: true, attemptsCount: true },
+        take: 10,
+      });
+
       learningMemory = {
         weakGrammarTopics: weakTopics.map((t) => t.topic),
         vocabulary: vocabProgress.map((v) => ({
@@ -120,6 +128,11 @@ export class AiService {
           corrected: m.correctSentence,
           explanation: m.explanation || '',
           rule: m.grammarRule || '',
+        })),
+        objectiveMasteries: masteries.map((om) => ({
+          objective: om.objective,
+          masteryScore: om.masteryScore,
+          attemptsCount: om.attemptsCount,
         })),
         strengths: lastSession ? [
           ...(lastSession.grammarScore > 75 ? ['Grammar'] : []),
@@ -183,6 +196,11 @@ export class AiService {
           totalMessages: { increment: 1 },
         },
       });
+
+      // Auto-trigger session finalization if AI determined lesson complete
+      if (result.lessonComplete && session.lessonId && userId) {
+        learningMemoryService.queueAnalysisJob(userId, dto.sessionId, session.lessonId);
+      }
     }
 
     return result;

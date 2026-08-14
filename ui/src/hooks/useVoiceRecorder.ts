@@ -137,17 +137,18 @@ export function useVoiceRecorder() {
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         dispatch(addMessage(aiMessage));
+        return chatResult;
       } catch (err: any) {
         setProcessingError(err.message || 'Chat request failed.');
       } finally {
         setIsThinking(false);
         dispatch(setIsAiResponding(false));
       }
-      return;
+      return null;
     }
 
     // 2. Voice input flow
-    if (!state.isRecording) return;
+    if (!state.isRecording) return null;
 
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -218,8 +219,10 @@ export function useVoiceRecorder() {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       dispatch(addMessage(aiMessage));
+      return chatResult;
     } catch (err: any) {
       setProcessingError(err.message || 'Failed to process voice input.');
+      return null;
     } finally {
       setIsTranscribing(false);
       setIsThinking(false);

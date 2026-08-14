@@ -10,6 +10,8 @@ export interface ChatResponse {
   reply: string;
   provider: string;
   model: string;
+  lessonComplete?: boolean;
+  completedObjectives?: string[];
 }
 
 export interface TranslateRequest {

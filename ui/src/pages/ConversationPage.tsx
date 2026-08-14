@@ -132,16 +132,24 @@ export const ConversationPage: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isAiResponding]);
 
-  const handleMicClick = () => {
+  const handleMicClick = async () => {
     if (micState === 'idle' || micState === 'error') {
       startListening();
     } else if (micState === 'listening') {
-      stopListeningAndSend();
+      const res = await stopListeningAndSend();
+      if (res?.lessonComplete) {
+        console.log('[AUTO_COMPLETION] AI lesson complete flag received via voice. Triggering finalization UI...');
+        handleEndSession();
+      }
     }
   };
 
-  const handleSendMessage = (text: string) => {
-    stopListeningAndSend(text);
+  const handleSendMessage = async (text: string) => {
+    const res = await stopListeningAndSend(text);
+    if (res?.lessonComplete) {
+      console.log('[AUTO_COMPLETION] AI lesson complete flag received via chat. Triggering finalization UI...');
+      handleEndSession();
+    }
   };
 
   const handleEndSession = async () => {

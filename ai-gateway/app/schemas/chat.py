@@ -39,4 +39,7 @@ class ChatResponse(BaseModel):
     reply: str = Field(..., description="AI generated mentor response")
     provider: str = Field(..., description="LLM provider name (e.g. 'groq')")
     model: str = Field(..., description="Name of the model that served the request")
+    lessonComplete: bool = Field(default=False, description="Whether all active lesson objectives are complete")
+    completedObjectives: List[str] = Field(default_factory=list, description="List of objectives completed during session")
+
 

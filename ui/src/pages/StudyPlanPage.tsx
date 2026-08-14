@@ -649,6 +649,7 @@ export const StudyPlanPage: React.FC = () => {
                                   <div className="space-y-2.5 pt-2">
                                     {tasksList.map((task, tidx) => {
                                       const isTaskCompleted = day.status === 'COMPLETED';
+                                      const isTaskInProgress = day.status === 'IN_PROGRESS' || day.hasActiveSession;
                                       return (
                                         <div key={tidx} className="p-3 bg-white rounded-xl border border-slate-200/50 flex justify-between items-center shadow-xs">
                                           <div className="flex items-center gap-2">
@@ -672,6 +673,8 @@ export const StudyPlanPage: React.FC = () => {
                                           >
                                             {isTaskCompleted ? (
                                               <>Review <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /></>
+                                            ) : isTaskInProgress ? (
+                                              <>Resume <ArrowRight className="w-3.5 h-3.5" /></>
                                             ) : (
                                               <>Start <ArrowRight className="w-3.5 h-3.5" /></>
                                             )}

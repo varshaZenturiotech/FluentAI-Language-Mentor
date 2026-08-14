@@ -261,6 +261,26 @@ async def test_lesson_completion_behavior(chat_service):
     kwargs = mock_provider.complete.call_args[1]
     system_prompt = kwargs["system_prompt"]
     
-    # Check that the anti-hallucination / completion rules are in system prompt
-    assert "Do not claim completion or congratulate the learner on finishing" in system_prompt
+    # Check that the objective-driven completion rules are in system prompt
+    assert "[LESSON_COMPLETE: objective 1 | objective 2]" in system_prompt
     assert "NEVER pretend that the learner completed a lesson" in system_prompt
+
+@pytest.mark.asyncio
+async def test_lesson_completion_marker_parsing(chat_service):
+    service, mock_provider = chat_service
+    mock_provider.complete.return_value = "Great job! You have demonstrated greetings.\n[LESSON_COMPLETE: Greetings]"
+    
+    request = ChatRequest(
+        sessionId="test-session-123",
+        message="Hello teacher!",
+        language="en",
+        lessonContext={
+            "objectives": ["Greetings"]
+        }
+    )
+    
+    response = await service.process_chat(request)
+    
+    assert response.lessonComplete is True
+    assert response.completedObjectives == ["Greetings"]
+    assert response.reply == "Great job! You have demonstrated greetings."

@@ -526,6 +526,12 @@ export class StudyPlanService {
       take: 5,
     });
 
+    const masteriesDb = await prisma.objectiveMastery.findMany({
+      where: { userId },
+      select: { objective: true, masteryScore: true, attemptsCount: true },
+      take: 10,
+    });
+
     const prevSession = await prisma.learningSession.findFirst({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -591,6 +597,11 @@ export class StudyPlanService {
         original: m.sentence,
         corrected: m.correctSentence,
         explanation: m.explanation,
+      })),
+      objectiveMasteries: masteriesDb.map((om) => ({
+        objective: om.objective,
+        masteryScore: om.masteryScore,
+        attemptsCount: om.attemptsCount,
       })),
       recentSessionSummary: prevSession ? prevSession.recommendations : 'First lesson session',
     };

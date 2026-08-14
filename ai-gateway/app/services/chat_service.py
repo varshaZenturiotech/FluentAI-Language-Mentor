@@ -143,6 +143,14 @@ class ChatService:
                     for m in mistakes_list
                 ])
                 
+            masteries_list = lm.get("objectiveMasteries", [])
+            masteries_str = ""
+            if isinstance(masteries_list, list) and masteries_list:
+                masteries_str = "\n".join([
+                    f"- Objective: '{om.get('objective', '')}' | Mastery: {om.get('masteryScore', 0)}% ({om.get('attemptsCount', 0)} attempts)"
+                    for om in masteries_list if isinstance(om, dict)
+                ])
+
             memory_str = f"""
 ### LEARNING MEMORY & ANALYTICS:
 - **Weak Grammar Topics**:
@@ -151,6 +159,8 @@ class ChatService:
 {vocab_str if vocab_str else '- None recorded yet'}
 - **Previous Mistakes**:
 {mistakes_str if mistakes_str else '- None recorded yet'}
+- **Objective Mastery History**:
+{masteries_str if masteries_str else '- No prior objective records'}
 - **Recent Session Summary**: {lm.get('recentSessionSummary', lm.get('prevSummary', 'No recent sessions'))}
 """
             blocks.append(memory_str.strip())
@@ -203,11 +213,31 @@ class ChatService:
             temperature=0.7
         )
 
+        lesson_complete = False
+        completed_objectives = []
+
+        # Parse [LESSON_COMPLETE: ...] marker if emitted by LLM during Study Plan lesson
+        if "[LESSON_COMPLETE" in reply_text:
+            parts = reply_text.split("[LESSON_COMPLETE")
+            clean_reply = parts[0].strip()
+            marker_raw = parts[1].rstrip("]").strip(" :")
+            lesson_complete = True
+            if marker_raw:
+                completed_objectives = [o.strip() for o in marker_raw.split("|") if o.strip()]
+            elif request.lessonContext and "objectives" in request.lessonContext:
+                objs = request.lessonContext.get("objectives", [])
+                completed_objectives = objs if isinstance(objs, list) else [str(objs)]
+            reply_text = clean_reply
+            logger.info(f"[LESSON_COMPLETE_DETECTED] AI signaled completion for session={request.sessionId} | objectives={completed_objectives}")
+
         return ChatResponse(
             reply=reply_text,
             provider="groq",
-            model=self.provider.model
+            model=self.provider.model,
+            lessonComplete=lesson_complete,
+            completedObjectives=completed_objectives
         )
+
 
     async def process_lesson_init(self, request: LessonInitRequest, user_id: str = None) -> ChatResponse:
         """Generates the initial mentor message for a new study plan lesson using full learner context."""
