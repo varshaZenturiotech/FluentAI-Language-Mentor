@@ -132,14 +132,43 @@ export const ConversationPage: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isAiResponding]);
 
+  const pollFinalizationStatus = async (activeSessionId: string) => {
+    setIsEnding(true);
+    setErrorMessage(null);
+
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      if (attempts > 20) {
+        clearInterval(interval);
+        setIsEnding(false);
+        setErrorMessage('Finalization analysis timed out.');
+        return;
+      }
+
+      try {
+        const res = await learningApi.getSessionStatus(activeSessionId);
+        if (res.success && res.data) {
+          clearInterval(interval);
+          setSummaryData(res.data);
+          setShowSummaryModal(true);
+          setIsEnding(false);
+        }
+      } catch (err) {
+        console.warn('Polling status error:', err);
+      }
+    }, 1500);
+  };
+
   const handleMicClick = async () => {
     if (micState === 'idle' || micState === 'error') {
       startListening();
     } else if (micState === 'listening') {
       const res = await stopListeningAndSend();
       if (res?.lessonComplete) {
-        console.log('[AUTO_COMPLETION] AI lesson complete flag received via voice. Triggering finalization UI...');
-        handleEndSession();
+        console.log('[AUTO_COMPLETION] AI lesson complete flag received via voice. Polling status...');
+        const activeSessionId = querySessionId || stateSessionId;
+        if (activeSessionId) pollFinalizationStatus(activeSessionId);
       }
     }
   };
@@ -147,46 +176,9 @@ export const ConversationPage: React.FC = () => {
   const handleSendMessage = async (text: string) => {
     const res = await stopListeningAndSend(text);
     if (res?.lessonComplete) {
-      console.log('[AUTO_COMPLETION] AI lesson complete flag received via chat. Triggering finalization UI...');
-      handleEndSession();
-    }
-  };
-
-  const handleEndSession = async () => {
-    const activeSessionId = querySessionId || stateSessionId;
-    if (!activeSessionId) return;
-
-    setIsEnding(true);
-    setErrorMessage(null);
-
-    try {
-      await learningApi.analyzeSession(activeSessionId, queryDayId || null);
-
-      let attempts = 0;
-      const interval = setInterval(async () => {
-        attempts++;
-        if (attempts > 15) {
-          clearInterval(interval);
-          setIsEnding(false);
-          setErrorMessage('Analysis timed out. Please try again.');
-          return;
-        }
-
-        try {
-          const res = await learningApi.getSessionStatus(activeSessionId);
-          if (res.success && res.data) {
-            clearInterval(interval);
-            setSummaryData(res.data);
-            setShowSummaryModal(true);
-            setIsEnding(false);
-          }
-        } catch (err) {
-          console.warn('Polling status error:', err);
-        }
-      }, 1500);
-    } catch (err: any) {
-      setIsEnding(false);
-      setErrorMessage(err.message || 'Failed to trigger session analysis.');
+      console.log('[AUTO_COMPLETION] AI lesson complete flag received via chat. Polling status...');
+      const activeSessionId = querySessionId || stateSessionId;
+      if (activeSessionId) pollFinalizationStatus(activeSessionId);
     }
   };
 
@@ -238,16 +230,12 @@ export const ConversationPage: React.FC = () => {
         {/* Action Controls & Topic Pills */}
         <div className="flex flex-wrap items-center gap-2">
           {querySessionId && (
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={handleEndSession}
-              isLoading={isEnding}
-              leftIcon={<ShieldCheck className="w-4 h-4" />}
-              className="shadow-sm border border-rose-200 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-2xl font-bold text-xs px-4"
-            >
-              End Session & Check Progress
-            </Button>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-2xl shadow-xs">
+              <span className={`w-2 h-2 rounded-full ${summaryData ? 'bg-emerald-500' : 'bg-emerald-500 animate-pulse'}`} />
+              <span className="text-xs font-extrabold text-emerald-900">
+                {summaryData ? 'Lesson Complete' : 'Mentor Guiding Lesson'}
+              </span>
+            </div>
           )}
 
           {/* Topic Select */}
