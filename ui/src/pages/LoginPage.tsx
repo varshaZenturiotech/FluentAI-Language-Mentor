@@ -10,10 +10,10 @@ import { learningProfileApi } from '../api/learning-profile.api';
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const { login, isLoading, error } = useAuth();
-  const [email, setEmail] = useState('rahul.@fluentai.app');
+  const [email, setEmail] = useState('rahul@fluentai.app');
   const [password, setPassword] = useState('password123');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SubmitEvent) => {
     e.preventDefault();
     try {
       await login({ email, password });

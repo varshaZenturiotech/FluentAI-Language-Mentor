@@ -21,6 +21,7 @@ export interface Message {
   id: string;
   sender: 'user' | 'ai';
   text: string;
+  role?: 'USER' | 'ASSISTANT' | 'SYSTEM' | string;
   malayalamTranslation?: string;
   timestamp: string;
   audioUrl?: string;

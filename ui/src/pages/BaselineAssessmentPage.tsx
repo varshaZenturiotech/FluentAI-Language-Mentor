@@ -1,1005 +1,819 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { MentorCanvas3D } from '../components/3d/MentorCanvas3D';
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { learningProfileApi } from '../api/learning-profile.api';
+import { Message } from '../types/chat';
+import { Button } from '../components/common/Button';
 import {
-  BookOpen,
-  Award,
-  ChevronRight,
-  Play,
-  Volume2,
-  CheckCircle,
-  HelpCircle,
   Sparkles,
+  Bot,
+  CheckCircle,
   ArrowRight,
-  Mic,
-  Square,
-  PenTool,
-  Loader,
+  RefreshCw,
   AlertCircle,
-  Check,
-  Zap,
-  RotateCcw,
-  StopCircle
+  ShieldCheck,
+  Volume2,
+  Mic,
+  Send,
+  MessageSquare,
+  Square
 } from 'lucide-react';
+import { sanitizeForTTS } from '../utils/ttsSanitizer';
 
-// ─── Self-contained voice recorder for the assessment ───────────────────────
-// Uses MediaRecorder directly — no Redux, no transcription, no AI calls.
-interface AssessmentVoiceRecorderProps {
-  onAudioReady: (blob: Blob | null) => void;
-}
+const INITIAL_AI_GREETING =
+  "Hi! Before we build your personalized learning plan, I'd like to get to know your English proficiency. We'll just have a short, natural conversation. There are no right or wrong answers, so speak naturally. Tell me a little about yourself.";
 
-const AssessmentVoiceRecorder: React.FC<AssessmentVoiceRecorderProps> = ({ onAudioReady }) => {
-  const [status, setStatus] = useState<'idle' | 'recording' | 'recorded'>('idle');
-  const [duration, setDuration] = useState(0);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function splitTextForSpeech(text: string): string[] {
+  if (!text || text.trim().length === 0) return [];
+  const rawParagraphs = text.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  const chunks: string[] = [];
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    audioRef.current = new Audio();
-    audioRef.current.onended = () => setIsPlaying(false);
-    return () => {
-      audioRef.current?.pause();
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, []);
-
-  const formatTime = (s: number) =>
-    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-
-  const startRecording = async () => {
-    setError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : 'audio/ogg';
-      const mr = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mr;
-      chunksRef.current = [];
-
-      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        if (audioUrl) URL.revokeObjectURL(audioUrl);
-        setAudioUrl(url);
-        setStatus('recorded');
-        onAudioReady(blob);
-      };
-
-      mr.start(250);
-      setStatus('recording');
-      setDuration(0);
-      timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000);
-    } catch (err: any) {
-      setError(err.message?.includes('Permission')
-        ? 'Microphone access denied. Please allow microphone access in your browser settings.'
-        : 'Could not start recording. Please check your microphone.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    mediaRecorderRef.current?.stop();
-  };
-
-  const resetRecording = () => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
-    audioRef.current?.pause();
-    setIsPlaying(false);
-    if (audioUrl) { URL.revokeObjectURL(audioUrl); setAudioUrl(null); }
-    setStatus('idle');
-    setDuration(0);
-    setError(null);
-    onAudioReady(null);
-  };
-
-  const togglePlayback = () => {
-    if (!audioUrl || !audioRef.current) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      setIsPlaying(false);
+  for (const para of rawParagraphs) {
+    if (para.length <= 600) {
+      chunks.push(para);
     } else {
-      audioRef.current.src = audioUrl;
-      audioRef.current.play().catch(() => setError('Playback failed.'));
-      setIsPlaying(true);
+      const sentences = para.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [para];
+      let currentChunk = '';
+      for (const sentence of sentences) {
+        if ((currentChunk + sentence).length <= 600) {
+          currentChunk += sentence;
+        } else {
+          if (currentChunk.trim()) chunks.push(currentChunk.trim());
+          currentChunk = sentence;
+        }
+      }
+      if (currentChunk.trim()) chunks.push(currentChunk.trim());
     }
-  };
-
-  return (
-    <div className="flex flex-col items-center p-6 bg-slate-900/60 backdrop-blur-md border border-slate-700 rounded-2xl w-full shadow-xl">
-      <h3 className="text-slate-200 text-xs font-bold uppercase tracking-widest mb-5">
-        {status === 'recording' ? '● Recording…' : status === 'recorded' ? '✓ Recording Ready' : 'Voice Recorder'}
-      </h3>
-
-      {/* Big mic / stop button */}
-      <div className="relative flex items-center justify-center w-28 h-28 mb-5">
-        {status === 'recording' && (
-          <>
-            <div className="absolute inset-0 rounded-full bg-red-500/25 animate-ping" />
-            <div className="absolute inset-2 rounded-full bg-red-500/15 animate-pulse" />
-          </>
-        )}
-        <button
-          onClick={status === 'recording' ? stopRecording : status === 'idle' ? startRecording : undefined}
-          disabled={status === 'recorded'}
-          className={`relative z-10 w-22 h-22 w-[88px] h-[88px] rounded-full flex items-center justify-center shadow-lg transition-all duration-300 ${
-            status === 'recording'
-              ? 'bg-red-500 text-white hover:bg-red-600 border border-red-400 cursor-pointer'
-              : status === 'recorded'
-              ? 'bg-slate-700 border border-slate-600 text-slate-500 cursor-not-allowed'
-              : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105 active:scale-95 border border-indigo-500 cursor-pointer shadow-indigo-600/30'
-          }`}
-          title={status === 'recording' ? 'Stop' : 'Start Recording'}
-        >
-          {status === 'recording' ? (
-            <Square className="w-9 h-9 fill-current" />
-          ) : (
-            <Mic className="w-9 h-9" />
-          )}
-        </button>
-      </div>
-
-      {/* Timer */}
-      <div className="text-center mb-5 h-10 flex items-center justify-center">
-        {status === 'recording' && (
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-red-400 font-mono text-2xl font-bold tracking-widest">{formatTime(duration)}</span>
-          </div>
-        )}
-        {status === 'recorded' && (
-          <span className="text-slate-300 font-mono text-xl font-semibold">{formatTime(duration)}</span>
-        )}
-        {status === 'idle' && (
-          <span className="text-slate-500 text-sm">Tap the mic to start</span>
-        )}
-      </div>
-
-      {/* Playback + reset controls (shown after recording) */}
-      {status === 'recorded' && (
-        <div className="flex items-center gap-4">
-          <button
-            onClick={resetRecording}
-            className="flex items-center justify-center w-11 h-11 rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-            title="Re-record"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
-          <button
-            onClick={togglePlayback}
-            className={`flex items-center justify-center w-14 h-14 rounded-full border shadow-lg transition-all cursor-pointer ${
-              isPlaying
-                ? 'bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-700'
-                : 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-700 hover:scale-105'
-            }`}
-            title={isPlaying ? 'Stop Playback' : 'Preview Recording'}
-          >
-            {isPlaying ? (
-              <Volume2 className="w-6 h-6 animate-pulse" />
-            ) : (
-              <Play className="w-6 h-6 fill-current ml-0.5" />
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div className="mt-4 flex items-start gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs w-full">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Hardcoded multiple choice questions
-const GRAMMAR_VOCAB_QUESTIONS = [
-  {
-    id: 'g1',
-    type: 'grammar',
-    question: 'If I ______ you, I would have gone to the party.',
-    options: ['am', 'were', 'had been', 'would be'],
-    correctIndex: 2 // had been (Third conditional: If I had been you, I would have gone)
-  },
-  {
-    id: 'g2',
-    type: 'grammar',
-    question: 'By next month, she ______ here for five years.',
-    options: ['works', 'is working', 'has worked', 'will have worked'],
-    correctIndex: 3 // will have worked (Future perfect)
-  },
-  {
-    id: 'g3',
-    type: 'grammar',
-    question: 'Hardly ______ finished my dinner when the bell rang.',
-    options: ['I had', 'had I', 'did I', 'I did'],
-    correctIndex: 1 // had I (Inversion after negative adverbial)
-  },
-  {
-    id: 'v1',
-    type: 'vocabulary',
-    question: 'Her explanation was so ______ that everyone understood immediately.',
-    options: ['ambiguous', 'lucid', 'tedious', 'complex'],
-    correctIndex: 1 // lucid
-  },
-  {
-    id: 'v2',
-    type: 'vocabulary',
-    question: 'The company plans to ______ its operations into global markets next year.',
-    options: ['expend', 'expand', 'expire', 'elicit'],
-    correctIndex: 1 // expand
-  },
-  {
-    id: 'v3',
-    type: 'vocabulary',
-    question: 'The detective was able to ______ the truth from the suspect after hours of interviewing.',
-    options: ['elicit', 'illicit', 'allocate', 'advocate'],
-    correctIndex: 0 // elicit
   }
-];
-
-const READING_PASSAGE = "Artificial Intelligence has transformed the way modern businesses operate. By automating routine tasks and analyzing massive datasets, AI enables organizations to significantly increase operational efficiency and make precise, data-driven decisions. However, the widespread adoption of AI also raises critical ethical concerns regarding potential job displacement and the security of sensitive personal data.";
-
-const READING_QUESTIONS = [
-  {
-    id: 'r1',
-    question: 'What is a major benefit of AI mentioned in the passage?',
-    options: [
-      'It eliminates the need for managers.',
-      'It increases operational efficiency and enables data-driven decisions.',
-      'It guarantees the security of all personal data.',
-      'It completely removes the necessity for business strategies.'
-    ],
-    correctIndex: 1
-  },
-  {
-    id: 'r2',
-    question: 'Which of the following ethical issues is explicitly raised in the passage?',
-    options: [
-      'The high cost of maintaining AI servers.',
-      'A lack of technical training for employees.',
-      'Job displacement and data security risks.',
-      'Reduced interest in manual craftsmanship.'
-    ],
-    correctIndex: 2
-  }
-];
-
-const LISTENING_PASSAGE = "Welcome to FluentAI. We are committed to helping you master the English language. Today, we will discuss the importance of active listening in professional settings. Active listening requires full concentration on what is being said rather than just passively hearing the message. By focusing entirely, you can respond accurately and build stronger professional connections.";
-
-const LISTENING_QUESTIONS = [
-  {
-    id: 'l1',
-    question: 'According to the speaker, what does active listening require?',
-    options: [
-      'Taking detailed notes of every word.',
-      'Full concentration on what is being said.',
-      'Nodding your head constantly to show agreement.',
-      'Speaking more than the other person.'
-    ],
-    correctIndex: 1
-  },
-  {
-    id: 'l2',
-    question: 'What is the primary purpose of FluentAI mentioned in the audio?',
-    options: [
-      'To build automated writing correctors.',
-      'To help you master the English language.',
-      'To record corporate business meetings.',
-      'To translate spoken text into multiple languages.'
-    ],
-    correctIndex: 1
-  }
-];
+  return chunks.length > 0 ? chunks : [text];
+}
 
 export const BaselineAssessmentPage: React.FC = () => {
   const navigate = useNavigate();
-  const [step, setStep] = useState<number>(0); // 0: Intro, 1: Gram/Vocab, 2: Reading, 3: Listening, 4: Writing, 5: Speaking, 6: Submitting, 7: Results
-  
-  // MCQ state
-  const [gvAnswers, setGvAnswers] = useState<Record<string, number>>({});
-  const [readingAnswers, setReadingAnswers] = useState<Record<string, number>>({});
-  const [listeningAnswers, setListeningAnswers] = useState<Record<string, number>>({});
-  
-  // Text & Audio state
-  const [writingText, setWritingText] = useState<string>('');
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  
-  // Audio playback state
-  const [isListeningAudioPlaying, setIsListeningAudioPlaying] = useState<boolean>(false);
-  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  
-  // Submission & Results
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<any>(null);
 
-  // Stop TTS voice synthesis on unmount
+  // Full conversation history for API requests
+  const [messages, setMessages] = useState<Message[]>([]);
+  // Active mentor question displayed on screen
+  const [currentQuestion, setCurrentQuestion] = useState<Message | null>(null);
+
+  const [turnCount, setTurnCount] = useState<number>(0);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isAssessmentCompleted, setIsAssessmentCompleted] = useState<boolean>(false);
+  const [assessmentResult, setAssessmentResult] = useState<any>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Audio / TTS states & deduplication
+  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [finalSpeechFinished, setFinalSpeechFinished] = useState<boolean>(false);
+
+  // Text input fallback toggle
+  const [showTextInput, setShowTextInput] = useState<boolean>(false);
+  const [typedMessage, setTypedMessage] = useState<string>('');
+
+  // Refs for speech lifecycle & single-owner idempotency
+  const sessionTimestampRef = useRef<number>(Date.now());
+  const autoPlayedMessageIdsRef = useRef<Set<string>>(new Set());
+  const activeSpeechMessageIdRef = useRef<string | null>(null);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const isFinalMessageRef = useRef<boolean>(false);
+  const initialMsgRef = useRef<Message | null>(null);
+  const hasSpokenInitialGreetingRef = useRef<boolean>(false);
+
+  // Clean stale baseline auto-played items from sessionStorage on fresh page load
   useEffect(() => {
-    return () => {
-      window.speechSynthesis.cancel();
-    };
+    if (typeof window !== 'undefined') {
+      try {
+        Object.keys(sessionStorage).forEach((key) => {
+          if (key.startsWith('baseline_auto_played_')) {
+            sessionStorage.removeItem(key);
+          }
+        });
+      } catch (e) {
+        // ignore storage errors
+      }
+    }
   }, []);
 
-  const handlePlayListeningAudio = () => {
-    if (isListeningAudioPlaying) {
-      window.speechSynthesis.cancel();
-      setIsListeningAudioPlaying(false);
+  const markMessageAsAutoPlayed = (msgId: string) => {
+    if (!msgId) return;
+    autoPlayedMessageIdsRef.current.add(msgId);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem(`baseline_auto_played_${msgId}`, 'true');
+      } catch (e) {
+        // ignore storage quota errors
+      }
+    }
+  };
+
+  // Voice recorder hook
+  const {
+    micState,
+    audioBlob,
+    isTranscribing,
+    isThinking,
+    startRecording,
+    stopRecording,
+    cancelRecording,
+  } = useVoiceRecorder();
+
+  // Compute overall mentor state for 3D Canvas
+  const effectiveMentorState = isSpeaking
+    ? 'speaking'
+    : isProcessing || isTranscribing || isThinking
+    ? 'thinking'
+    : micState === 'listening'
+    ? 'listening'
+    : 'idle';
+
+  // Central Speech Synthesis / TTS player with chunking, voice readiness, and single-owner idempotency
+  const speakMessage = (message: Message, isFinalTurn: boolean = false, isManualReplay: boolean = false) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      console.warn('[Baseline TTS] SpeechSynthesis API unavailable in browser.');
       return;
     }
 
-    setIsListeningAudioPlaying(true);
-    const utterance = new SpeechSynthesisUtterance(LISTENING_PASSAGE);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.9; // slightly slower for clarity
-    
-    utterance.onend = () => {
-      setIsListeningAudioPlaying(false);
-    };
-    utterance.onerror = () => {
-      setIsListeningAudioPlaying(false);
-    };
+    if (!message || !message.id || !message.text || !message.text.trim()) {
+      console.warn('[Baseline TTS] Refusing to speak empty or invalid message:', message?.id);
+      return;
+    }
 
-    speechUtteranceRef.current = utterance;
-    window.speechSynthesis.speak(utterance);
-  };
+    // Toggle off if manual click on already active message
+    if (isManualReplay && playingMessageId === message.id) {
+      console.log('[Baseline TTS] Stopping active playback for message:', message.id);
+      window.speechSynthesis.cancel();
+      activeSpeechMessageIdRef.current = null;
+      activeUtteranceRef.current = null;
+      setPlayingMessageId(null);
+      setIsSpeaking(false);
+      return;
+    }
 
-  const handleSkip = async () => {
-    if (window.confirm("Are you sure you want to skip the baseline assessment? We will generate your study plan using your self-assessment slider ratings instead.")) {
-      setIsSubmitting(true);
-      setError(null);
-      setStep(6);
-      try {
-        const formData = new FormData();
-        formData.append('writingText', '');
-        formData.append('mcGrammarScore', '0');
-        formData.append('mcGrammarTotal', '0'); // indicates skip
-        formData.append('mcVocabularyScore', '0');
-        formData.append('mcVocabularyTotal', '0');
-        formData.append('mcReadingScore', '0');
-        formData.append('mcReadingTotal', '0');
-        formData.append('mcListeningScore', '0');
-        formData.append('mcListeningTotal', '0');
-        formData.append('targetLevel', 'Intermediate');
-
-        const data = await learningProfileApi.submitBaselineAssessment(formData);
-        setResult(data);
-        setStep(7);
-      } catch (err: any) {
-        console.error(err);
-        setError(err.message || 'Failed to submit baseline skip request.');
-        setStep(0);
-      } finally {
-        setIsSubmitting(false);
+    // Idempotency guard for automatic playback
+    if (!isManualReplay) {
+      if (autoPlayedMessageIdsRef.current.has(message.id)) {
+        console.log('[Baseline TTS] Skipping already auto-played message:', message.id);
+        return;
+      }
+      if (typeof window !== 'undefined' && sessionStorage.getItem(`baseline_auto_played_${message.id}`) === 'true') {
+        console.log('[Baseline TTS] Skipping message auto-played in sessionStorage:', message.id);
+        return;
+      }
+      if (activeSpeechMessageIdRef.current === message.id) {
+        console.log('[Baseline TTS] Speech already active for message:', message.id);
+        return;
       }
     }
-  };
 
-  const handleSubmitWithConfirm = () => {
-    if (!audioBlob) {
-      const confirmed = window.confirm(
-        "You haven't recorded a voice audio. Do you want to submit the assessment using only written metrics? Speaking and fluency scores will default."
-      );
-      if (!confirmed) return;
+    // Cancel previous speech safely before starting new utterance
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+      window.speechSynthesis.cancel();
     }
-    handleSubmit();
+
+    if (isFinalTurn) {
+      isFinalMessageRef.current = true;
+    }
+
+    activeSpeechMessageIdRef.current = message.id;
+
+    const cleanText = sanitizeForTTS(message.text);
+    const chunks = splitTextForSpeech(cleanText);
+
+    if (chunks.length === 0) {
+      setIsSpeaking(false);
+      setPlayingMessageId(null);
+      activeSpeechMessageIdRef.current = null;
+      if (isFinalTurn) setFinalSpeechFinished(true);
+      return;
+    }
+
+    let chunkIndex = 0;
+
+    const speakNextChunk = () => {
+      if (activeSpeechMessageIdRef.current !== message.id) {
+        console.log('[Baseline TTS] Sequence cancelled or replaced for message:', message.id);
+        return;
+      }
+
+      if (chunkIndex >= chunks.length) {
+        setIsSpeaking(false);
+        setPlayingMessageId(null);
+        activeSpeechMessageIdRef.current = null;
+        if (isFinalMessageRef.current) {
+          setFinalSpeechFinished(true);
+        }
+        return;
+      }
+
+      const chunkText = chunks[chunkIndex];
+      chunkIndex++;
+
+      const utterance = new SpeechSynthesisUtterance(chunkText);
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+
+      // Select preferred English voice if available
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        const preferredVoice = voices.find(
+          (v) =>
+            v.lang.startsWith('en') &&
+            (v.name.includes('Google') ||
+              v.name.includes('Natural') ||
+              v.name.includes('Samantha') ||
+              v.name.includes('Daniel') ||
+              v.name.includes('David'))
+        ) || voices.find((v) => v.lang.startsWith('en'));
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+      }
+
+      activeUtteranceRef.current = utterance;
+
+      utterance.onstart = () => {
+        setIsSpeaking(true);
+        setPlayingMessageId(message.id);
+        if (!isManualReplay) {
+          markMessageAsAutoPlayed(message.id);
+        }
+        if (message.id.startsWith('init-greeting')) {
+          hasSpokenInitialGreetingRef.current = true;
+        }
+        console.log('[Baseline TTS] Utterance onstart fired for message:', message.id);
+      };
+
+      utterance.onend = () => {
+        console.log('[Baseline TTS] Utterance onend fired for message chunk');
+        speakNextChunk();
+      };
+
+      utterance.onerror = (e: any) => {
+        if (e.error === 'interrupted' || e.error === 'canceled') {
+          return;
+        }
+        console.error('[Baseline TTS] Speech chunk error:', e);
+        setIsSpeaking(false);
+        setPlayingMessageId(null);
+        activeSpeechMessageIdRef.current = null;
+        if (isFinalMessageRef.current) {
+          setFinalSpeechFinished(true);
+        }
+      };
+
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+
+      window.speechSynthesis.speak(utterance);
+    };
+
+    // Voice loading readiness (Case A vs Case B) with guaranteed fallback
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length === 0) {
+      console.log('[Baseline TTS] Voice list empty on load, attaching onvoiceschanged listener with fallback...');
+      let hasRun = false;
+      const runSpeak = () => {
+        if (hasRun) return;
+        hasRun = true;
+        window.speechSynthesis.onvoiceschanged = null;
+        console.log('[Baseline TTS] Executing speakNextChunk after voice readiness check');
+        speakNextChunk();
+      };
+
+      window.speechSynthesis.onvoiceschanged = runSpeak;
+      setTimeout(runSpeak, 250);
+    } else {
+      speakNextChunk();
+    }
   };
 
-  const handleSubmit = async () => {
-    setIsSubmitting(true);
-    setError(null);
-    setStep(6);
+  // Initial greeting message creation (first-class AI message)
+  useEffect(() => {
+    if (!initialMsgRef.current) {
+      const initialMsg: Message = {
+        id: `init-greeting-${sessionTimestampRef.current}`,
+        sender: 'ai',
+        text: INITIAL_AI_GREETING,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      initialMsgRef.current = initialMsg;
+      setMessages([initialMsg]);
+      setCurrentQuestion(initialMsg);
+    }
+  }, []);
+
+  // Single authoritative reactive coordinator for automatically speaking AI messages
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const aiMessages = messages.filter(
+      (m) => m.sender === 'ai' && m.text && m.text.trim().length > 0
+    );
+    if (aiMessages.length === 0) return;
+
+    const latestAiMessage = aiMessages[aiMessages.length - 1];
+
+    if (autoPlayedMessageIdsRef.current.has(latestAiMessage.id)) {
+      return;
+    }
+
+    if (
+      typeof window !== 'undefined' &&
+      sessionStorage.getItem(`baseline_auto_played_${latestAiMessage.id}`) === 'true'
+    ) {
+      return;
+    }
+
+    if (micState === 'listening') {
+      console.log('[Baseline TTS] Skipping auto-play while microphone is active');
+      return;
+    }
+
+    console.log('[Baseline TTS] Single coordinator detected unspoken AI message:', latestAiMessage.id);
+    const isFinalTurn = isAssessmentCompleted && latestAiMessage.id === messages[messages.length - 1]?.id;
+    speakMessage(latestAiMessage, isFinalTurn, false);
+  }, [messages, isAssessmentCompleted, micState]);
+
+  // Clean up active speech on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // Cancel active speech when user begins microphone recording
+  useEffect(() => {
+    if (micState === 'listening') {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      activeSpeechMessageIdRef.current = null;
+      activeUtteranceRef.current = null;
+      setPlayingMessageId(null);
+      setIsSpeaking(false);
+    }
+  }, [micState]);
+
+  // Core handler for submitting turn
+  const submitTurn = async (textMessage: string, audioFileBlob?: Blob | null) => {
+    if (isProcessing || isAssessmentCompleted) return;
+
+    setErrorMessage(null);
+    setIsProcessing(true);
+
+    // Cancel active TTS when user submits response
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+
+    const currentHistory = messages.map((m) => ({
+      role: m.sender === 'user' ? 'user' : 'assistant',
+      content: m.text,
+    }));
+
+    const tempUserMsgId = 'user-turn-' + Date.now();
+    const displayUserText = textMessage || (audioFileBlob ? '[Voice message]' : '...');
+    const userMsgObj: Message = {
+      id: tempUserMsgId,
+      sender: 'user',
+      text: displayUserText,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setMessages((prev) => [...prev, userMsgObj]);
 
     try {
-      // Calculate MCQ Scores
-      let grammarScore = 0;
-      let grammarTotal = 0;
-      let vocabScore = 0;
-      let vocabTotal = 0;
-
-      GRAMMAR_VOCAB_QUESTIONS.forEach((q) => {
-        const answer = gvAnswers[q.id];
-        const isCorrect = answer === q.correctIndex;
-        if (q.type === 'grammar') {
-          grammarTotal++;
-          if (isCorrect) grammarScore++;
-        } else {
-          vocabTotal++;
-          if (isCorrect) vocabScore++;
-        }
-      });
-
-      let readingScore = 0;
-      READING_QUESTIONS.forEach((q) => {
-        if (readingAnswers[q.id] === q.correctIndex) {
-          readingScore++;
-        }
-      });
-
-      let listeningScore = 0;
-      LISTENING_QUESTIONS.forEach((q) => {
-        if (listeningAnswers[q.id] === q.correctIndex) {
-          listeningScore++;
-        }
-      });
-
-      // Prepare FormData
       const formData = new FormData();
-      formData.append('writingText', writingText);
-      formData.append('mcGrammarScore', grammarScore.toString());
-      formData.append('mcGrammarTotal', grammarTotal.toString());
-      formData.append('mcVocabularyScore', vocabScore.toString());
-      formData.append('mcVocabularyTotal', vocabTotal.toString());
-      formData.append('mcReadingScore', readingScore.toString());
-      formData.append('mcReadingTotal', READING_QUESTIONS.length.toString());
-      formData.append('mcListeningScore', listeningScore.toString());
-      formData.append('mcListeningTotal', LISTENING_QUESTIONS.length.toString());
-      formData.append('targetLevel', 'Intermediate');
+      formData.append('history', JSON.stringify(currentHistory));
+      formData.append('turnCount', turnCount.toString());
+      formData.append('userMessage', textMessage || '');
+      formData.append('targetLevel', 'unknown');
 
-      if (audioBlob) {
-        formData.append('file', audioBlob, 'speaking.wav');
+      if (audioFileBlob) {
+        const audioFile = new File([audioFileBlob], 'assessment_turn.webm', {
+          type: audioFileBlob.type || 'audio/webm',
+        });
+        formData.append('file', audioFile);
       }
 
-      const evalData = await learningProfileApi.submitBaselineAssessment(formData);
-      setResult(evalData);
-      setStep(7);
+      const res = await learningProfileApi.submitConversationalTurn(formData);
+
+      if (!res) {
+        throw new Error('No response received from assessment service.');
+      }
+
+      if (res.resolvedUserMessage && textMessage !== res.resolvedUserMessage) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === tempUserMsgId ? { ...m, text: res.resolvedUserMessage } : m))
+        );
+      }
+
+      const botMsgObj: Message = {
+        id: 'bot-turn-' + Date.now(),
+        sender: 'ai',
+        text: res.message || "Thank you! Let me process your response.",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      setCurrentQuestion(botMsgObj);
+      setTurnCount((prev) => prev + 1);
+
+      const isCompleted = res.isCompleted === true;
+
+      if (isCompleted) {
+        setIsAssessmentCompleted(true);
+        setAssessmentResult(res);
+      }
+
+      // Add to messages; single reactive coordinator handles TTS playback!
+      setMessages((prev) => [...prev, botMsgObj]);
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Failed to grade your baseline assessment. Please check your network and try again.');
-      setStep(5); // Go back to Speaking step so they can try re-submitting
+      console.error('Error in conversational assessment turn:', err);
+      setErrorMessage(
+        err.response?.data?.error?.message ||
+          err.message ||
+          'Failed to send response. Please check your connection and try again.'
+      );
     } finally {
-      setIsSubmitting(false);
+      setIsProcessing(false);
+      cancelRecording();
+      setTypedMessage('');
     }
   };
 
-  const stepsList = [
-    { label: 'Introduction', icon: Sparkles },
-    { label: 'Grammar & Vocab', icon: BookOpen },
-    { label: 'Reading', icon: BookOpen },
-    { label: 'Listening', icon: Volume2 },
-    { label: 'Writing', icon: PenTool },
-    { label: 'Speaking', icon: Mic }
-  ];
+  // Mic tap toggle handler
+  const handleMicToggle = () => {
+    if (isSpeaking || isProcessing || isTranscribing || isThinking) return;
+
+    if (micState === 'listening') {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
+  // Auto-submit voice recording when audioBlob arrives from stopRecording
+  useEffect(() => {
+    if (audioBlob) {
+      submitTurn('', audioBlob);
+    }
+  }, [audioBlob]);
+
+  // Handle text fallback submit
+  const handleTextSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!typedMessage.trim() || isProcessing || isSpeaking) return;
+    submitTurn(typedMessage.trim(), null);
+  };
+
+  // Navigate downstream after completion
+  const handleProceedDownstream = () => {
+    if (assessmentResult?.nextStep === 'VIEW_STUDY_PLAN') {
+      navigate('/study-plan');
+    } else {
+      navigate('/learning-onboarding');
+    }
+  };
+
+  const showCompletionSummaryCard = isAssessmentCompleted && (finalSpeechFinished || !isSpeaking);
+
+  // States for mic button styling & animations
+  const isMicDisabled = isSpeaking || isProcessing || isTranscribing || isThinking;
+  const isRecording = micState === 'listening';
+  const isReadyToRecord = !isMicDisabled && !isRecording;
 
   return (
-    <div className="min-h-screen py-12 px-4 flex flex-col items-center justify-start bg-slate-50 relative overflow-hidden">
-      {/* Background shapes */}
-      <div className="absolute top-10 left-10 w-72 h-72 bg-indigo-100 rounded-full filter blur-3xl -z-10 opacity-70" />
-      <div className="absolute bottom-10 right-10 w-96 h-96 bg-blue-100 rounded-full filter blur-3xl -z-10 opacity-70" />
-
-      {/* Title */}
-      <div className="text-center mb-8">
-        <div className="inline-flex items-center gap-2 bg-indigo-50 border border-indigo-100/60 px-3 py-1 rounded-full text-indigo-700 text-xs font-semibold mb-3">
-          <Award className="w-3.5 h-3.5" /> FluentAI Performance Evaluator
-        </div>
-        <h1 className="text-3xl font-black text-slate-900 tracking-tight">AI Language Baseline Assessment</h1>
-        <p className="text-slate-500 text-sm mt-1.5 max-w-md mx-auto">
-          Measure your actual grammar, speaking, listening, and comprehension level in under 10 minutes.
-        </p>
-      </div>
-
-      {/* Step Stepper Header (Only visible during active evaluation) */}
-      {step > 0 && step < 6 && (
-        <div className="w-full max-w-4xl mb-8 bg-white p-4 rounded-2xl border border-slate-200/50 shadow-sm">
-          <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
-            {stepsList.map((s, idx) => {
-              const StepIcon = s.icon;
-              const isActive = step === idx;
-              const isCompleted = step > idx;
-
-              return (
-                <div key={idx} className="flex items-center gap-2 flex-1 min-w-[120px]">
-                  <div
-                    className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
-                      isActive
-                        ? 'bg-indigo-600 text-white ring-4 ring-indigo-100'
-                        : isCompleted
-                        ? 'bg-emerald-500 text-white'
-                        : 'bg-slate-100 text-slate-400'
-                    }`}
-                  >
-                    {isCompleted ? <Check className="w-4 h-4" /> : idx}
-                  </div>
-                  <span
-                    className={`text-xs font-bold transition-colors ${
-                      isActive ? 'text-indigo-600' : isCompleted ? 'text-emerald-600' : 'text-slate-400'
-                    }`}
-                  >
-                    {s.label}
-                  </span>
-                  {idx < stepsList.length - 1 && (
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-300 ml-auto hidden sm:block" />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="w-full bg-slate-100 h-1.5 rounded-full mt-4 overflow-hidden">
-            <div
-              className="bg-indigo-600 h-full transition-all duration-300"
-              style={{ width: `${(step / (stepsList.length - 1)) * 100}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Main Glassmorphic Layout Container */}
-      <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl p-8 rounded-3xl border border-slate-200/80 shadow-xl transition-all duration-500 min-h-[400px] flex flex-col justify-between">
-        
-        {/* STEP 0: WELCOME & INTRO */}
-        {step === 0 && (
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-                <Sparkles className="text-indigo-600 w-6 h-6" /> Welcome to your Baseline Assessment
-              </h2>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                To build your 8-week personalized roadmap, we need to assess your true starting point. 
-                This assessment checks your proficiency levels across listening, speaking, grammar, reading, and writing.
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/20 to-sky-50/30 flex flex-col">
+      {/* Header */}
+      <header className="border-b border-indigo-100/80 bg-white/80 backdrop-blur-md sticky top-0 z-30 px-4 py-3 sm:px-6 shadow-sm">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-sky-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20">
+              <Bot className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                FluentAI Mentor Baseline Assessment
+                <span className="text-xs bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-full font-semibold">
+                  Voice-First Assessment
+                </span>
+              </h1>
+              <p className="text-xs text-slate-500 hidden sm:block">
+                Natural conversational assessment with your AI English Mentor.
               </p>
             </div>
+          </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/40">
-                <h3 className="font-extrabold text-slate-800 text-sm mb-1">🔍 Self-Assessment vs. Measured</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  We maintain your subjective ratings alongside objective scores to capture both confidence and true mastery.
-                </p>
-              </div>
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/40">
-                <h3 className="font-extrabold text-slate-800 text-sm mb-1">⚡ Dynamic 8-Week Roadmap</h3>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  Your baseline proficiency scores are directly injected into our LLM generator to optimize weak topics first.
-                </p>
-              </div>
-            </div>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/')}
+              className="text-xs text-slate-600 rounded-xl"
+            >
+              Exit Assessment
+            </Button>
+          </div>
+        </div>
+      </header>
 
-            <div className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 flex gap-3 text-indigo-800 text-xs">
-              <HelpCircle className="w-5 h-5 shrink-0 text-indigo-600" />
+      {/* Main Grid */}
+      <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Assessment Metrics & Progress Info */}
+        <div className="lg:col-span-4 space-y-4 lg:sticky lg:top-20">
+          <div className="glass-card p-5 rounded-3xl border border-indigo-100/80 shadow-xl shadow-indigo-950/5 space-y-5">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                <Sparkles className="w-5 h-5" />
+              </div>
               <div>
-                <strong className="font-bold block mb-0.5">What is required?</strong>
-                A working microphone (for speaking prompt), speaker/headphones (for listening), and about 5-10 minutes of uninterrupted study time.
+                <h2 className="font-bold text-slate-900 text-base">AI Mentor Assessment</h2>
+                <p className="text-xs text-slate-500">Evaluating Fluency & Grammar</p>
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
-              <button
-                onClick={() => setStep(1)}
-                className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 hover:scale-102 transition-all cursor-pointer inline-flex items-center justify-center gap-2"
-              >
-                Start Assessment <ArrowRight className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleSkip}
-                className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl font-bold transition-all cursor-pointer text-center"
-              >
-                Skip & Use Slider Estimates
-              </button>
-            </div>
-          </div>
-        )}
+            {/* Sidebar Stats Indicators */}
+            <div className="space-y-3 text-xs">
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Turns Completed</span>
+                <span className="font-bold text-indigo-600 text-sm bg-indigo-50 px-2.5 py-0.5 rounded-full">
+                  {turnCount} / 6+
+                </span>
+              </div>
 
-        {/* STEP 1: GRAMMAR & VOCABULARY */}
-        {step === 1 && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-black text-slate-800">Grammar & Vocabulary</h2>
-              <p className="text-xs text-slate-500">Select the correct option to complete each sentence.</p>
-            </div>
-
-            <div className="space-y-6 max-h-[380px] overflow-y-auto pr-2">
-              {GRAMMAR_VOCAB_QUESTIONS.map((q, qidx) => (
-                <div key={q.id} className="space-y-2 bg-slate-50/50 p-4 rounded-2xl border border-slate-200/40">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                    Question {qidx + 1} • {q.type}
-                  </span>
-                  <p className="text-sm font-semibold text-slate-800">{q.question}</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                    {q.options.map((opt, oidx) => (
-                      <button
-                        key={oidx}
-                        onClick={() => setGvAnswers((prev) => ({ ...prev, [q.id]: oidx }))}
-                        className={`text-left text-xs font-semibold px-4 py-2.5 rounded-xl border transition-all cursor-pointer ${
-                          gvAnswers[q.id] === oidx
-                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-md'
-                            : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="pt-4 flex justify-between items-center">
-              <button
-                onClick={() => setStep(0)}
-                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all cursor-pointer"
-              >
-                Back
-              </button>
-              <button
-                onClick={() => setStep(2)}
-                disabled={Object.keys(gvAnswers).length < GRAMMAR_VOCAB_QUESTIONS.length}
-                className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
-              >
-                Next <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 2: READING COMPREHENSION */}
-        {step === 2 && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-black text-slate-800">Reading Comprehension</h2>
-              <p className="text-xs text-slate-500">Read the passage below and answer the questions.</p>
-            </div>
-
-            <div className="bg-slate-900 text-slate-100 p-5 rounded-2xl leading-relaxed text-xs border border-slate-800 italic shadow-inner">
-              "{READING_PASSAGE}"
-            </div>
-
-            <div className="space-y-6 overflow-y-auto pr-1">
-              {READING_QUESTIONS.map((q, qidx) => (
-                <div key={q.id} className="space-y-2 bg-slate-50/50 p-4 rounded-2xl border border-slate-200/40">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                    Comprehension Q{qidx + 1}
-                  </span>
-                  <p className="text-sm font-semibold text-slate-800">{q.question}</p>
-                  <div className="space-y-2 mt-2">
-                    {q.options.map((opt, oidx) => (
-                      <button
-                        key={oidx}
-                        onClick={() => setReadingAnswers((prev) => ({ ...prev, [q.id]: oidx }))}
-                        className={`text-left text-xs font-semibold px-4 py-2.5 rounded-xl border w-full transition-all cursor-pointer ${
-                          readingAnswers[q.id] === oidx
-                            ? 'bg-indigo-600 border-indigo-600 text-white'
-                            : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="pt-4 flex justify-between items-center">
-              <button
-                onClick={() => setStep(1)}
-                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all cursor-pointer"
-              >
-                Back
-              </button>
-              <div className="flex items-center gap-3">
-                {Object.keys(readingAnswers).length < READING_QUESTIONS.length && (
-                  <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
-                    {Object.keys(readingAnswers).length}/{READING_QUESTIONS.length} answered
-                  </span>
-                )}
-                <button
-                  onClick={() => setStep(3)}
-                  disabled={Object.keys(readingAnswers).length < READING_QUESTIONS.length}
-                  className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
-                >
-                  Next <ChevronRight className="w-4 h-4" />
-                </button>
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Assessment Mode</span>
+                <span className="font-bold text-emerald-600 text-sm bg-emerald-50 px-2.5 py-0.5 rounded-full">
+                  Adaptive Dialog
+                </span>
               </div>
             </div>
-          </div>
-        )}
 
-        {/* STEP 3: LISTENING COMPREHENSION */}
-        {step === 3 && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-black text-slate-800">Listening Comprehension</h2>
-              <p className="text-xs text-slate-500">Play the audio passage, then answer the questions based on what you hear.</p>
-            </div>
-
-            <div className="flex flex-col items-center justify-center p-6 bg-slate-50 rounded-2xl border border-slate-200/50">
-              <button
-                onClick={handlePlayListeningAudio}
-                className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all cursor-pointer ${
-                  isListeningAudioPlaying
-                    ? 'bg-red-500 text-white shadow-red-500/20'
-                    : 'bg-indigo-600 text-white shadow-indigo-600/25 hover:bg-indigo-700 hover:scale-105'
-                }`}
-              >
-                {isListeningAudioPlaying ? (
-                  <Loader className="w-8 h-8 animate-spin" />
-                ) : (
-                  <Play className="w-8 h-8 fill-current ml-1" />
-                )}
-              </button>
-              <span className="text-xs font-bold text-slate-500 mt-3.5">
-                {isListeningAudioPlaying ? 'Playing speech passage... Listen closely.' : 'Click to Play Audio'}
+            <div className="p-3.5 rounded-2xl border border-emerald-100 bg-emerald-50/40 flex items-start gap-3 text-xs text-emerald-800">
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">
+                Your responses are evaluated in real time across CEFR criteria to build your personalized study plan.
               </span>
             </div>
+          </div>
+        </div>
 
-            <div className="space-y-6 overflow-y-auto pr-1">
-              {LISTENING_QUESTIONS.map((q, qidx) => (
-                <div key={q.id} className="space-y-2 bg-slate-50/50 p-4 rounded-2xl border border-slate-200/40">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                    Listening Q{qidx + 1}
-                  </span>
-                  <p className="text-sm font-semibold text-slate-800">{q.question}</p>
-                  <div className="space-y-2 mt-2">
-                    {q.options.map((opt, oidx) => (
-                      <button
-                        key={oidx}
-                        onClick={() => setListeningAnswers((prev) => ({ ...prev, [q.id]: oidx }))}
-                        className={`text-left text-xs font-semibold px-4 py-2.5 rounded-xl border w-full transition-all cursor-pointer ${
-                          listeningAnswers[q.id] === oidx
-                            ? 'bg-indigo-600 border-indigo-600 text-white'
-                            : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="pt-4 flex justify-between items-center">
-              <button
-                onClick={() => {
-                  window.speechSynthesis.cancel();
-                  setIsListeningAudioPlaying(false);
-                  setStep(2);
-                }}
-                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all cursor-pointer"
+        {/* Right Column: Unified Mentor Canvas & Mic Interactive Console */}
+        <div className="lg:col-span-8 flex flex-col glass-card rounded-3xl border border-indigo-100/80 shadow-xl shadow-indigo-950/5 p-6 space-y-6 justify-between min-h-[620px]">
+          
+          {/* Top Error Alert */}
+          {errorMessage && (
+            <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+              <div className="flex-1">{errorMessage}</div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setErrorMessage(null)}
+                className="text-xs text-red-600 border-red-300 rounded-xl"
               >
-                Back
-              </button>
-              <div className="flex items-center gap-3">
-                {Object.keys(listeningAnswers).length < LISTENING_QUESTIONS.length && (
-                  <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
-                    {Object.keys(listeningAnswers).length}/{LISTENING_QUESTIONS.length} answered
-                  </span>
-                )}
-                <button
-                  onClick={() => {
-                    window.speechSynthesis.cancel();
-                    setIsListeningAudioPlaying(false);
-                    setStep(4);
-                  }}
-                  disabled={Object.keys(listeningAnswers).length < LISTENING_QUESTIONS.length}
-                  className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                Dismiss
+              </Button>
+            </div>
+          )}
+
+          {/* Assessment Completion Card */}
+          {showCompletionSummaryCard ? (
+            <div className="my-auto p-6 rounded-3xl bg-gradient-to-br from-indigo-900 via-indigo-850 to-slate-900 text-white shadow-2xl border border-indigo-500/30 text-center space-y-4 animate-fadeIn">
+              <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 mx-auto flex items-center justify-center ring-4 ring-emerald-500/30">
+                <CheckCircle className="w-10 h-10" />
+              </div>
+
+              <div className="space-y-1">
+                <h3 className="text-xl font-bold text-white flex items-center justify-center gap-2">
+                  Assessment Complete!
+                </h3>
+                <p className="text-sm text-indigo-200 max-w-md mx-auto leading-relaxed">
+                  Thank you! FluentAI has evaluated your responses and calculated your baseline CEFR metrics.
+                  Your 8-week adaptive study plan is ready.
+                </p>
+              </div>
+
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                <Button
+                  variant="primary"
+                  size="lg"
+                  onClick={handleProceedDownstream}
+                  rightIcon={<ArrowRight className="w-5 h-5" />}
+                  className="w-full sm:w-auto rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 hover:from-indigo-600 hover:to-sky-600 shadow-lg shadow-indigo-500/30"
                 >
-                  Next <ChevronRight className="w-4 h-4" />
-                </button>
+                  {assessmentResult?.nextStep === 'VIEW_STUDY_PLAN'
+                    ? 'Go to My AI Study Plan'
+                    : 'Complete Onboarding'}
+                </Button>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* STEP 4: WRITING ASSESSMENT */}
-        {step === 4 && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-black text-slate-800">Writing Skills Evaluation</h2>
-              <p className="text-xs text-slate-500">Provide a short written paragraph responding to the prompt below.</p>
-            </div>
-
-            <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
-              <h3 className="font-extrabold text-slate-800 text-sm mb-1.5">📝 Writing Prompt</h3>
-              <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Describe a challenge you faced at work or school, how you overcame it, and what you learned from the experience. Write at least 30-50 words.
-              </p>
-            </div>
-
-            <div className="space-y-1">
-              <textarea
-                value={writingText}
-                onChange={(e) => setWritingText(e.target.value)}
-                placeholder="Type your response here..."
-                rows={5}
-                className="w-full text-sm p-4 rounded-2xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50/50"
-              />
-              <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold px-1">
-                <span>Min: 30 words recommended</span>
-                <span>Word Count: {writingText.trim() === '' ? 0 : writingText.trim().split(/\s+/).length}</span>
-              </div>
-            </div>
-
-            <div className="pt-4 flex justify-between items-center">
-              <button
-                onClick={() => setStep(3)}
-                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all cursor-pointer"
-              >
-                Back
-              </button>
-              <button
-                onClick={() => setStep(5)}
-                disabled={writingText.trim().split(/\s+/).filter(Boolean).length < 15}
-                className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
-              >
-                Next <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 5: SPEAKING SKILLS */}
-        {step === 5 && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-black text-slate-800">Speaking & Pronunciation</h2>
-              <p className="text-xs text-slate-500">Record yourself reading the paragraph out loud to measure speech parameters.</p>
-            </div>
-
-            <div className="bg-slate-900 text-slate-100 p-5 rounded-2xl leading-relaxed text-xs border border-slate-800 italic shadow-inner">
-              "Continuous learning is the key to personal and professional growth. Every day presents an opportunity to acquire new knowledge, refine skills, and expand perspectives. By embracing challenges as learning opportunities, we can adapt to a rapidly changing world and achieve our highest potential."
-            </div>
-
-            {/* Self-contained assessment recorder */}
-            <AssessmentVoiceRecorder onAudioReady={(blob) => setAudioBlob(blob)} />
-
-            {error && (
-              <div className="p-3 bg-red-50 text-red-500 text-xs rounded-xl flex items-center gap-2 border border-red-200">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-
-            <div className="pt-4 flex justify-between items-center">
-              <button
-                onClick={() => setStep(4)}
-                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all cursor-pointer"
-              >
-                Back
-              </button>
-              <button
-                onClick={handleSubmitWithConfirm}
-                className="px-8 py-2.5 bg-indigo-600 text-white rounded-xl font-bold transition-all hover:bg-indigo-700 cursor-pointer shadow-lg shadow-indigo-600/10 flex items-center gap-1.5"
-              >
-                Submit Assessment <CheckCircle className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 6: SUBMITTING / AI EVALUATION LOAD SCREEN */}
-        {step === 6 && (
-          <div className="flex flex-col items-center justify-center py-16 space-y-6">
-            <div className="relative">
-              <div className="w-20 h-20 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin" />
-              <Sparkles className="w-8 h-8 text-indigo-500 absolute inset-0 m-auto animate-pulse" />
-            </div>
-            
-            <div className="text-center space-y-2 max-w-sm">
-              <h3 className="text-lg font-black text-slate-800">Analyzing Performance Metrics...</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Our AI language model is evaluating grammatical syntax, vocabulary variety, writing structure, and audio coherence to assign your CEFR starting baseline levels.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 7: COMPLETED REPORT / RESULTS DASHBOARD */}
-        {step === 7 && result && (
-          <div className="space-y-6">
-            <div className="text-center">
-              <div className="w-16 h-16 bg-emerald-500 rounded-full flex items-center justify-center text-white mx-auto shadow-lg shadow-emerald-500/20 mb-4 animate-scale-up">
-                <Check className="w-8 h-8 stroke-[3]" />
-              </div>
-              <h2 className="text-2xl font-black text-slate-800">Assessment Complete!</h2>
-              <p className="text-slate-500 text-xs mt-1">Your baseline levels have been computed successfully.</p>
-            </div>
-
-            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200/50">
-              <div className="flex justify-between items-center border-b border-slate-200/60 pb-3 mb-4">
-                <span className="text-xs text-slate-500 font-bold">CEFR MEASURED LEVEL</span>
-                <span className="text-indigo-600 text-xl font-black">{result.overallLevel || result.level || 'Intermediate'}</span>
-              </div>
-
-              {/* Skills breakdown */}
-              <div className="grid grid-cols-2 gap-4">
-                {[
-                  { name: 'Grammar', value: result.grammar?.score ?? 50, lvl: result.grammar?.level ?? 'A2' },
-                  { name: 'Vocabulary', value: result.vocabulary?.score ?? 50, lvl: result.vocabulary?.level ?? 'A2' },
-                  { name: 'Reading', value: result.reading?.score ?? 50, lvl: result.reading?.level ?? 'A2' },
-                  { name: 'Listening', value: result.listening?.score ?? 50, lvl: result.listening?.level ?? 'A2' },
-                  { name: 'Writing', value: result.writing?.score ?? 50, lvl: result.writing?.level ?? 'A2' },
-                  { name: 'Speaking', value: result.speaking?.score ?? 50, lvl: result.speaking?.level ?? 'A2' },
-                  { name: 'Fluency', value: result.fluency?.score ?? 50, lvl: result.fluency?.level ?? 'A2' },
-                ].map((s) => (
-                  <div key={s.name} className="space-y-1">
-                    <div className="flex justify-between items-center text-[11px] font-bold text-slate-600">
-                      <span>{s.name}</span>
-                      <span className="text-indigo-600">{s.lvl} ({s.value}%)</span>
-                    </div>
-                    <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
-                      <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${s.value}%` }} />
-                    </div>
+          ) : (
+            <>
+              {/* Single Active Mentor Question Display Card */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
+                    <Bot className="w-4 h-4" />
+                    <span>Mentor Question • Turn {turnCount + 1}</span>
                   </div>
-                ))}
-              </div>
-            </div>
 
-            {/* Strengths & Weaknesses */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100/60">
-                <h4 className="text-xs font-black text-emerald-800 flex items-center gap-1.5 mb-2">
-                  <Check className="w-3.5 h-3.5" /> Core Strengths
-                </h4>
-                <ul className="text-[11px] text-emerald-700 space-y-1 font-semibold">
-                  {result.strengths && result.strengths.length > 0 ? (
-                    result.strengths.map((str: string, idx: number) => <li key={idx}>• {str}</li>)
-                  ) : (
-                    <li>• Good vocabulary range</li>
+                  {currentQuestion && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => speakMessage(currentQuestion, false, true)}
+                      className="text-xs text-indigo-600 hover:bg-indigo-50 rounded-xl flex items-center gap-1.5 font-semibold"
+                    >
+                      <Volume2 className={`w-4 h-4 ${isSpeaking ? 'animate-pulse text-emerald-500' : ''}`} />
+                      <span>{isSpeaking ? 'Speaking...' : 'Listen Again'}</span>
+                    </Button>
                   )}
-                </ul>
-              </div>
+                </div>
 
-              <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100/60">
-                <h4 className="text-xs font-black text-rose-800 flex items-center gap-1.5 mb-2">
-                  <Zap className="w-3.5 h-3.5" /> Weaknesses
-                </h4>
-                <ul className="text-[11px] text-rose-700 space-y-1 font-semibold">
-                  {result.weaknesses && result.weaknesses.length > 0 ? (
-                    result.weaknesses.map((w: string, idx: number) => <li key={idx}>• {w}</li>)
+                {/* Question Text */}
+                <div className="bg-white/90 rounded-2xl p-5 border border-slate-100 shadow-sm space-y-2 min-h-[90px] flex flex-col justify-center text-center sm:text-left">
+                  {isProcessing ? (
+                    <div className="flex items-center gap-3 text-slate-500 py-3 justify-center">
+                      <RefreshCw className="w-5 h-5 text-indigo-600 animate-spin" />
+                      <span className="text-sm font-medium">Evaluating your response and formulating next question...</span>
+                    </div>
                   ) : (
-                    <li>• Pronunciation clarity</li>
-                  )}
-                </ul>
-              </div>
-            </div>
-
-            {/* CTA — branch on whether onboarding is still needed */}
-            {result.nextStep === 'COMPLETE_ONBOARDING' ? (
-              <div className="space-y-4">
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-black text-amber-800">Your baseline assessment has been saved successfully.</p>
-                    <p className="text-xs text-amber-700 mt-1 leading-relaxed">
-                      Please complete your onboarding to create your learner profile and continue to your personalized 8-week study plan. Your assessment results will be preserved exactly as measured — you will not need to repeat the assessment.
+                    <p className="text-slate-800 text-lg font-medium leading-relaxed">
+                      {currentQuestion?.text || INITIAL_AI_GREETING}
                     </p>
+                  )}
+                </div>
+              </div>
+
+              {/* UNIFIED INTERACTION CENTER: 3D Avatar Canvas Directly Paired with Mic */}
+              <div className="relative bg-gradient-to-b from-indigo-50/40 via-sky-50/30 to-white p-4 sm:p-6 rounded-3xl border border-indigo-100/60 shadow-inner flex flex-col items-center justify-center space-y-4">
+                
+                {/* 3D Mentor Avatar Canvas (Unified Focal Point) */}
+                <div className="relative w-full max-w-xs h-48 sm:h-52 rounded-2xl overflow-hidden shadow-sm">
+                  <MentorCanvas3D micState={effectiveMentorState} className="w-full h-full rounded-2xl" />
+                  
+                  {/* Avatar Status Badge */}
+                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-md px-3 py-1 rounded-full shadow-md border border-indigo-100 flex items-center gap-2 text-xs font-semibold text-slate-700 pointer-events-none">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        effectiveMentorState === 'speaking'
+                          ? 'bg-emerald-500 animate-ping'
+                          : effectiveMentorState === 'thinking'
+                          ? 'bg-amber-500 animate-pulse'
+                          : effectiveMentorState === 'listening'
+                          ? 'bg-sky-500 animate-pulse'
+                          : 'bg-indigo-400'
+                      }`}
+                    />
+                    <span>
+                      {effectiveMentorState === 'speaking'
+                        ? 'FluentAI Speaking...'
+                        : effectiveMentorState === 'thinking'
+                        ? 'Evaluating Response...'
+                        : effectiveMentorState === 'listening'
+                        ? 'Listening...'
+                        : 'Mentor Ready'}
+                    </span>
                   </div>
                 </div>
-                <button
-                  onClick={() => navigate('/learning-onboarding')}
-                  className="w-full py-3.5 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-600/25 hover:bg-indigo-700 transition-all cursor-pointer text-center inline-flex items-center justify-center gap-2"
-                >
-                  Complete Onboarding <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => navigate('/study-plan')}
-                className="w-full py-3.5 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-600/25 hover:bg-indigo-700 transition-all cursor-pointer text-center inline-flex items-center justify-center gap-2"
-              >
-                Go to my AI Study Plan <ArrowRight className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        )}
 
-      </div>
+                {/* Voice Status Pill */}
+                <div className="text-xs font-semibold px-4 py-1.5 rounded-full border transition-all z-10">
+                  {isSpeaking ? (
+                    <span className="text-emerald-700 bg-emerald-50 border-emerald-200 px-3 py-1 rounded-full flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      FluentAI is speaking... Mic disabled until TTS finishes.
+                    </span>
+                  ) : isProcessing ? (
+                    <span className="text-amber-700 bg-amber-50 border-amber-200 px-3 py-1 rounded-full flex items-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                      Evaluating your response...
+                    </span>
+                  ) : isRecording ? (
+                    <span className="text-sky-700 bg-sky-50 border-sky-200 px-3 py-1 rounded-full flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+                      Recording spoken response... Tap mic or click Done when finished.
+                    </span>
+                  ) : (
+                    <span className="text-indigo-700 bg-indigo-50 border-indigo-200 px-3 py-1 rounded-full flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                      Tap mic to start speaking your answer
+                    </span>
+                  )}
+                </div>
+
+                {/* Unified Mic Button Container with Keyframe Pulse Animations */}
+                <div className="relative my-2 flex items-center justify-center">
+                  
+                  {/* STATE 2: Soft Inviting Concentric Pulse Rings (Idle / Ready to record) */}
+                  {isReadyToRecord && (
+                    <>
+                      <div className="absolute w-24 h-24 rounded-full border-2 border-indigo-400/50 animate-mic-invite-1 pointer-events-none" />
+                      <div className="absolute w-24 h-24 rounded-full border-2 border-sky-400/40 animate-mic-invite-2 pointer-events-none" />
+                    </>
+                  )}
+
+                  {/* STATE 3: Energetic Recording Pulse Rings (Recording in progress) */}
+                  {isRecording && (
+                    <>
+                      <div className="absolute inset-0 rounded-full bg-sky-400/40 animate-mic-recording pointer-events-none" />
+                      <div className="absolute -inset-4 rounded-full bg-sky-400/20 animate-ping pointer-events-none" />
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleMicToggle}
+                    disabled={isMicDisabled}
+                    className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center shadow-xl transition-all transform active:scale-95 ${
+                      isMicDisabled
+                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                        : isRecording
+                        ? 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white ring-4 ring-sky-300'
+                        : 'bg-gradient-to-tr from-indigo-600 to-sky-500 text-white hover:shadow-indigo-500/40 hover:scale-105'
+                    }`}
+                    title={
+                      isSpeaking
+                        ? 'Mentor is speaking...'
+                        : isRecording
+                        ? 'Tap to stop & submit'
+                        : 'Tap to start recording'
+                    }
+                  >
+                    {isRecording ? (
+                      <Square className="w-10 h-10 fill-current animate-pulse" />
+                    ) : (
+                      <Mic className="w-10 h-10" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Recording Control Button (when recording) */}
+                {isRecording && (
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={() => stopRecording()}
+                    className="bg-sky-600 hover:bg-sky-700 text-white rounded-xl shadow-md font-bold text-xs flex items-center gap-2 z-10"
+                  >
+                    <Square className="w-4 h-4 fill-current" />
+                    <span>Done — Send Spoken Answer</span>
+                  </Button>
+                )}
+
+                {/* Secondary Text Input Toggle */}
+                <div className="pt-1 z-10">
+                  <button
+                    type="button"
+                    onClick={() => setShowTextInput((prev) => !prev)}
+                    className="text-xs text-slate-500 hover:text-indigo-600 font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>{showTextInput ? 'Hide text fallback' : 'Type response instead'}</span>
+                  </button>
+                </div>
+
+                {/* Expanded Text Input Fallback */}
+                {showTextInput && (
+                  <form onSubmit={handleTextSubmit} className="w-full max-w-md space-y-2 pt-2 animate-fadeIn z-10">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={typedMessage}
+                        onChange={(e) => setTypedMessage(e.target.value)}
+                        placeholder="Type your response here..."
+                        disabled={isMicDisabled}
+                        className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-800 disabled:opacity-50"
+                      />
+                      <Button
+                        type="submit"
+                        disabled={!typedMessage.trim() || isMicDisabled}
+                        isLoading={isProcessing}
+                        size="md"
+                        className="rounded-xl px-4"
+                      >
+                        <Send className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Bottom Security Footer */}
+          <div className="text-center text-[11px] text-slate-400 border-t border-slate-100 pt-3">
+            FluentAI Baseline Engine • Evaluating Fluency, Grammar, and Vocabulary
+          </div>
+        </div>
+      </main>
     </div>
   );
 };

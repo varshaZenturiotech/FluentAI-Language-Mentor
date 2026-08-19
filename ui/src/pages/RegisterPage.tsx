@@ -18,7 +18,7 @@ export const RegisterPage: React.FC = () => {
   const [learningLanguage, setLearningLanguage] = useState('English');
   const [level, setLevel] = useState<'Beginner' | 'Intermediate' | 'Advanced'>('Intermediate');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SubmitEvent) => {
     e.preventDefault();
     try {
       await register({

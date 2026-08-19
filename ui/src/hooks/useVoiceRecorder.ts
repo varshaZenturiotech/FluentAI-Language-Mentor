@@ -136,8 +136,12 @@ export function useVoiceRecorder() {
           text: chatResult.reply,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
+        console.log('[AUTO_TTS] AI response completed', {
+          messageId: aiMessage.id,
+          textLength: aiMessage.text?.length,
+        });
         dispatch(addMessage(aiMessage));
-        return chatResult;
+        return { ...chatResult, aiMessageId: aiMessage.id };
       } catch (err: any) {
         setProcessingError(err.message || 'Chat request failed.');
       } finally {
@@ -212,15 +216,25 @@ export function useVoiceRecorder() {
       });
       console.log(`Chat response received | processing time: ${Date.now() - chatStart}ms`);
 
+      if (!chatResult || !chatResult.reply || !chatResult.reply.trim()) {
+        console.warn('[AI_RESPONSE] Refusing to render/store empty AI reply message');
+        return null;
+      }
+
       const aiMessage = {
         id: crypto.randomUUID(),
         sender: 'ai' as const,
         text: chatResult.reply,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
+      console.log('[AUTO_TTS] AI response completed', {
+        messageId: aiMessage.id,
+        textLength: aiMessage.text?.length,
+      });
       dispatch(addMessage(aiMessage));
-      return chatResult;
+      return { ...chatResult, aiMessageId: aiMessage.id };
     } catch (err: any) {
+
       setProcessingError(err.message || 'Failed to process voice input.');
       return null;
     } finally {

@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.exceptions import setup_exception_handlers
 from app.core.middleware import InternalAuthAndTracingMiddleware
-from app.api import health, pronunciation, translate, chat, speech, study_plan, learning
+from app.api import health, pronunciation, translate, chat, speech, study_plan, learning, conversational_assessment
 
 # 1. Initialize global logging
 setup_logging()
@@ -31,6 +31,8 @@ app.include_router(chat.router, prefix="/api/v1")
 app.include_router(speech.router, prefix="/api/v1")
 app.include_router(study_plan.router, prefix="/api/v1")
 app.include_router(learning.router, prefix="/api/v1")
+app.include_router(conversational_assessment.router, prefix="/api/v1")
+
 
 @app.on_event("startup")
 async def startup_event():

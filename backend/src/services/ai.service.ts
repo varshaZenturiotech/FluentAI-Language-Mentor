@@ -176,9 +176,27 @@ export class AiService {
       learningMemory,
     };
 
-    const result = await this.client.chat(payload as any, requestId, userId);
+    let result = await this.client.chat(payload as any, requestId, userId);
 
-    if (session && result.reply) {
+
+    if (!result || !result.reply || !result.reply.trim()) {
+      if (!result) {
+        result = {
+          reply: "I understand! Could you share a bit more about that so we can continue practicing?",
+          provider: 'groq',
+          model: 'fallback',
+          lessonComplete: false,
+          completedObjectives: [],
+        };
+      } else {
+        result.reply = "I understand! Could you share a bit more about that so we can continue practicing?";
+        result.lessonComplete = false;
+        result.completedObjectives = [];
+      }
+    }
+
+
+    if (session && result.reply && result.reply.trim()) {
       // 5. Save AI's response to database
       await prisma.message.create({
         data: {
@@ -199,9 +217,10 @@ export class AiService {
 
       // Auto-trigger session finalization if AI determined lesson complete
       if (result.lessonComplete && session.lessonId && userId) {
-        learningMemoryService.queueAnalysisJob(userId, dto.sessionId, session.lessonId);
+        learningMemoryService.queueAnalysisJob(userId, dto.sessionId, session.lessonId, true);
       }
     }
+
 
     return result;
   }

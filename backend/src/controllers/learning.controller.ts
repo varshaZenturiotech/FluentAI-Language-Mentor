@@ -283,14 +283,14 @@ export class LearningController {
         return;
       }
 
-      const { sessionId, studyPlanDayId } = req.body;
+      const { sessionId, studyPlanDayId, isFinal } = req.body;
       if (!sessionId) {
         next(ApiError.badRequest('Session ID is required.'));
         return;
       }
 
       // Trigger background analysis
-      learningMemoryService.queueAnalysisJob(req.user.id, sessionId, studyPlanDayId);
+      learningMemoryService.queueAnalysisJob(req.user.id, sessionId, studyPlanDayId, isFinal === true);
 
       res.status(HttpStatusCodes.ACCEPTED).json({
         success: true,

@@ -103,6 +103,9 @@ export class LearningProfileRepository {
         createdAt: profile.createdAt,
         updatedAt: profile.updatedAt,
       };
+    }, {
+      maxWait: 10000,
+      timeout: 20000,
     });
   }
 }

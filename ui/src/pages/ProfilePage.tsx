@@ -16,7 +16,7 @@ export const ProfilePage: React.FC = () => {
   const [editEmail, setEditEmail] = useState(profile.email);
   const [editLevel, setEditLevel] = useState(profile.level);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = (e: React.SubmitEvent) => {
     e.preventDefault();
     dispatch(
       updateUserProfile({

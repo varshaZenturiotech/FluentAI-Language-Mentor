@@ -4,7 +4,7 @@ import { UserProfile } from '../types/user';
 const initialState: UserProfile = {
   id: 'user_12345',
   name: 'Rahul',
-  email: 'rahul.@fluentai.app',
+  email: 'rahul@fluentai.app',
   avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80',
   nativeLanguage: 'Malayalam',
   learningLanguage: 'English',

@@ -112,7 +112,7 @@ export const SettingsPage: React.FC = () => {
     setProfile({ ...profile, interests: newInterests });
   };
 
-  const handleSaveProfile = async (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.SubmitEvent) => {
     e.preventDefault();
     if (!profile) return;
     setSavingProfile(true);

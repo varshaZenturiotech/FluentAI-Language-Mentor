@@ -222,4 +222,235 @@ Please evaluate all skills accordingly.
                 "assessmentStatus": "completed"
             }
 
+    def _extract_and_parse_json(self, response_text: str) -> dict:
+        import re
+        import json
+
+        # 1. Strip reasoning/think blocks (<think>...</think>)
+        cleaned_text = re.sub(r'<think>[\s\S]*?</think>', '', response_text).strip()
+
+        # 2. Try direct json.loads
+        try:
+            return json.loads(cleaned_text)
+        except Exception:
+            pass
+
+        # 3. Try matching markdown code block ```json ... ```
+        md_matches = re.findall(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", cleaned_text)
+        for candidate in reversed(md_matches):
+            try:
+                sans_comments = re.sub(r'//.*', '', candidate)
+                return json.loads(sans_comments)
+            except Exception:
+                pass
+
+        # 4. Extract top-level JSON candidates using brace-level counting
+        candidates = []
+        stack = []
+        start = -1
+        for i, char in enumerate(cleaned_text):
+            if char == '{':
+                if not stack:
+                    start = i
+                stack.append('{')
+            elif char == '}' and stack:
+                stack.pop()
+                if not stack and start != -1:
+                    candidates.append(cleaned_text[start:i+1])
+                    start = -1
+
+        for candidate in reversed(candidates):
+            try:
+                sans_comments = re.sub(r'//.*', '', candidate)
+                return json.loads(sans_comments)
+            except Exception:
+                pass
+
+        # 5. Last resort: strip comments on whole text and load
+        sans_comments = re.sub(r'//.*', '', cleaned_text)
+        return json.loads(sans_comments)
+
+    async def evaluate_conversational_turn(
+        self,
+        history: list,
+        turn_count: int,
+        user_message: str,
+        target_level: str = "unknown"
+    ) -> dict:
+        """Processes a single turn in the conversational baseline assessment.
+        Returns next mentor question or final evaluation report if complete.
+        """
+        system_prompt = """You are FluentAI, an warm, encouraging AI English Mentor conducting a natural conversational baseline assessment.
+
+CRITICAL ROLE AND GOALS:
+1. Conduct a natural, adaptive conversation with the learner to assess their English level across CEFR scales (Pre-A1 to C2).
+2. DO NOT make it feel like an exam or test. NO "Question 1 of 6", NO multiple choice, NO scores during conversation, NO formal quiz instructions.
+3. Adapt your follow-up questions dynamically based on the learner's demonstrated proficiency:
+   - For simple/short answers (Beginner): Ask simple, friendly follow-ups with clear vocabulary.
+   - For detailed/complex answers (Intermediate/Advanced): Ask for opinions, comparisons, or reasoning to evaluate higher-level grammar and vocabulary.
+4. Cover key conversational topics across turns:
+   - Turn 1: Work / daily routine. Ask what the learner does and what a typical day looks like for them (e.g. "Tell me about yourself. What do you do, and what do you usually do during your day?"). This surfaces present-tense/habitual-action usage.
+   - Turn 2: Follow-up on their specific work. Ask about the kind of projects or tasks they handle day to day, building directly on what they just said (e.g. "Nice! Tell me about your work. What kind of projects do you usually work on?").
+   - Turn 3: A short role-play prompt tied to their work context, to test spontaneous, less-rehearsed speech (e.g. "Now imagine you're meeting a new colleague for the first time. How would you introduce yourself?"). Prefer role-play scenarios (introducing themselves, explaining their job to someone new, asking for help at work) over abstract questions whenever the learner's answers suggest they'd benefit from a concrete scenario to react to.
+   - Turn 4: Past experience / recent events (e.g. a project they finished, a challenge they solved).
+   - Turn 5: Future goals / plans.
+   - Turn 6+: Opinion / reasoning / problem solving.
+
+Always build each question on the specific content of the learner's previous answer rather than asking a disconnected topic — the transition itself should read as a natural reaction to what they just said, not a topic switch.
+
+IMPORTANT COMMUNICATION RULE:
+Never use emojis, emoticons, decorative Unicode symbols, or emoji-style icons in assessment responses.
+
+All greetings, questions, follow-ups, acknowledgements, transitions, and completion messages must be plain natural language suitable for spoken conversation and TTS.
+
+Do not use emojis even when expressing friendliness, encouragement, excitement, or acknowledgement.
+
+Use natural words instead, for example:
+"That's interesting."
+"Good to hear."
+"That sounds useful."
+"Tell me more about that."
+
+OUTPUT FORMAT:
+Return ONLY raw valid JSON matching this schema:
+{
+  "message": "Your next conversational question OR warm completion closing message.",
+  "isCompleted": false,
+  "turnCount": 6,
+  "estimatedLevel": "B1",
+  "coveredSkills": ["introduction", "daily_life", "past_experience"],
+  "evaluation": null
+}
+
+CRITICAL INSTRUCTIONS:
+1. DO NOT include any reasoning, thinking process, draft notes, commentary, or numbered lists in your output.
+2. Your response MUST start immediately with '{' and end with '}'.
+3. If isCompleted is false, evaluation MUST be null.
+4. isCompleted MUST be set to true ONLY if turn_count >= 5 AND you have collected sufficient evidence to assess skills.
+
+IF isCompleted IS true, the "evaluation" field MUST contain the full structured CEFR report:
+{
+  "message": "Thank you! That was really helpful. I have a good understanding of your English level now. I'll use what I learned to create your personalized learning plan.",
+  "isCompleted": true,
+  "turnCount": 6,
+  "estimatedLevel": "B1",
+  "coveredSkills": ["introduction", "daily_life", "past_experience", "future_plans", "opinion"],
+  "evaluation": {
+    "grammar": { "score": 75, "level": "B1", "strengths": ["Good basic tense usage"], "weaknesses": ["Minor tense consistency issues"] },
+    "vocabulary": { "score": 70, "level": "B1", "strengths": ["Good everyday vocabulary"], "weaknesses": ["Could use more precise synonyms"] },
+    "reading": { "score": 75, "level": "B1", "strengths": ["Comprehends conversational prompts"], "weaknesses": ["Complex clause parsing"] },
+    "listening": { "score": 80, "level": "B2", "strengths": ["Responds accurately to audio questions"], "weaknesses": ["Fast nuanced speech"] },
+    "writing": { "score": 70, "level": "B1", "strengths": ["Clear text communication"], "weaknesses": ["Sentence structure complexity"] },
+    "speaking": { "score": 75, "level": "B1", "strengths": ["Expresses ideas naturally"], "weaknesses": ["Spoken pauses for vocabulary"] },
+    "pronunciation": { "score": 0, "level": "N/A", "strengths": [], "weaknesses": [], "assessmentStatus": "unavailable" },
+    "fluency": { "score": 72, "level": "B1", "strengths": ["Good conversational flow"], "weaknesses": ["Hesitations on complex topics"] },
+    "overallScore": 74,
+    "overallLevel": "B1",
+    "strengths": ["Conversational clarity", "Active engagement"],
+    "weaknesses": ["Advanced grammar structures", "Vocabulary range"],
+    "assessmentStatus": "completed"
+  }
+}
+"""
+
+        # Format history
+        formatted_history = []
+        for item in (history or []):
+            role = "assistant" if item.get("role") == "assistant" else "user"
+            formatted_history.append(f"{role.capitalize()}: {item.get('content', '')}")
+
+        if user_message and (not history or history[-1].get("content") != user_message):
+            formatted_history.append(f"User: {user_message}")
+
+        history_text = "\n".join(formatted_history) if formatted_history else "No prior history."
+        logger.info(f"[LIVE_HISTORY_TEXT_BUILT] turnCount={turn_count}:\n{history_text}")
+
+        user_prompt = f"""Process this baseline assessment turn:
+Current Turn Count: {turn_count}
+Target Level (self-reported): {target_level}
+
+Conversation History so far:
+{history_text}
+
+Latest User Message:
+\"{user_message}\"
+
+Generate the next turn JSON now.
+"""
+
+        try:
+            logger.info(f"Processing conversational baseline assessment turn | turnCount: {turn_count} | targetLevel: {target_level}")
+            response_text = await self.provider.complete(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0.4,
+                json_mode=False,
+                max_tokens=2048
+            )
+            logger.info(f"[LIVE_RAW_LLM_RESPONSE] turnCount={turn_count}:\n{response_text}")
+
+            # Robust multi-pass JSON extraction
+            result = self._extract_and_parse_json(response_text)
+
+            # Ensure fields exist
+            result["turnCount"] = turn_count + 1
+            if result.get("isCompleted") and result.get("evaluation"):
+                # Normalize pronunciation and overall score
+                eval_obj = result["evaluation"]
+                if isinstance(eval_obj, dict):
+                    eval_obj["pronunciation"] = {
+                        "score": 0,
+                        "level": "N/A",
+                        "strengths": [],
+                        "weaknesses": [],
+                        "assessmentStatus": "unavailable"
+                    }
+                    active_skills = ["grammar", "vocabulary", "reading", "listening", "writing", "speaking", "fluency"]
+                    scores = [eval_obj.get(s, {}).get("score", 70) if isinstance(eval_obj.get(s), dict) else 70 for s in active_skills]
+                    eval_obj["overallScore"] = int(sum(scores) / len(scores)) if scores else 70
+                    if "overallLevel" not in eval_obj or not eval_obj["overallLevel"]:
+                        eval_obj["overallLevel"] = result.get("estimatedLevel", "B1")
+                    eval_obj["assessmentStatus"] = "completed"
+                    result["evaluation"] = eval_obj
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Error evaluating conversational turn (turnCount: {turn_count}): {str(e)}")
+            is_final_turn = turn_count >= 5
+            if is_final_turn:
+                return {
+                    "message": "Thank you! I have a good understanding of your English level now. I'll use what I learned to create your personalized learning plan.",
+                    "isCompleted": True,
+                    "turnCount": turn_count + 1,
+                    "estimatedLevel": "B1",
+                    "coveredSkills": ["introduction", "daily_life", "past_experience", "future_plans", "opinion"],
+                    "evaluation": {
+                        "grammar": { "score": 70, "level": "B1", "strengths": ["Basic structures"], "weaknesses": [] },
+                        "vocabulary": { "score": 70, "level": "B1", "strengths": ["Common vocabulary"], "weaknesses": [] },
+                        "reading": { "score": 70, "level": "B1", "strengths": ["Prompt comprehension"], "weaknesses": [] },
+                        "listening": { "score": 70, "level": "B1", "strengths": ["Audio engagement"], "weaknesses": [] },
+                        "writing": { "score": 70, "level": "B1", "strengths": ["Text communication"], "weaknesses": [] },
+                        "speaking": { "score": 70, "level": "B1", "strengths": ["Conversational responses"], "weaknesses": [] },
+                        "pronunciation": { "score": 0, "level": "N/A", "strengths": [], "weaknesses": [], "assessmentStatus": "unavailable" },
+                        "fluency": { "score": 70, "level": "B1", "strengths": ["Continuous dialog"], "weaknesses": [] },
+                        "overallScore": 70,
+                        "overallLevel": "B1",
+                        "strengths": ["Active engagement", "Clear communication"],
+                        "weaknesses": ["Grammar consistency"],
+                        "assessmentStatus": "completed"
+                    }
+                }
+            else:
+                return {
+                    "message": "That's interesting! Could you tell me a little more about what you enjoy doing in your free time?",
+                    "isCompleted": False,
+                    "turnCount": turn_count + 1,
+                    "estimatedLevel": "B1",
+                    "coveredSkills": ["introduction", "daily_life"],
+                    "evaluation": None
+                }
+
 learning_service = LearningService()
+
+

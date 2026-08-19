@@ -22,16 +22,14 @@ class GroqProvider(BaseProvider):
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         json_mode: bool = False,
-        max_tokens: int = 4096,
+        max_tokens: int = 1024,
     ) -> str:
+
         start_time = time.perf_counter()
         
-        # Log Incoming request details, selected model, and prompt size
+        # Log incoming request details safely
         prompt_size = len(system_prompt) + sum(len(m.get("content", "")) for m in messages)
-        logger.info(f"[DEBUG LOG] Incoming Request Messages: {messages}")
-        logger.info(f"[DEBUG LOG] Loaded Prompt: '{system_prompt}' (size: {len(system_prompt)} chars)")
-        logger.info(f"[DEBUG LOG] Selected Model: {self.model}")
-        logger.info(f"[DEBUG LOG] Prompt Size: {prompt_size} chars")
+        logger.info(f"[MODEL_REQUEST_SENDING] provider=groq model={self.model} messages_count={len(messages)} promptSize={prompt_size} maxTokens={max_tokens}")
 
         api_messages = [{"role": "system", "content": system_prompt}]
         for m in messages:
@@ -53,16 +51,19 @@ class GroqProvider(BaseProvider):
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-        # Log Outgoing request details
-        logger.info(f"[DEBUG LOG] Outgoing Request Arguments: {kwargs}")
-
         try:
             logger.debug(f"Sending request to Groq with model={self.model}, messages_count={len(api_messages)}")
             response = await self.client.chat.completions.create(**kwargs)
             
             duration = time.perf_counter() - start_time
-            reply_text = response.choices[0].message.content or ""
+            msg_obj = response.choices[0].message
+            reply_text = getattr(msg_obj, "content", "") or ""
             
+            # Inspect for structured reasoning fields if exposed by provider SDK
+            structured_reasoning = getattr(msg_obj, "reasoning", None) or getattr(msg_obj, "reasoning_content", None)
+            if structured_reasoning:
+                logger.info(f"[AI_REASONING_DETECTED] Provider returned separate structured reasoning field | length={len(structured_reasoning)}")
+
             # Access token usage and other metadata from the Groq API response
             request_id = getattr(response, "id", None)
             usage = getattr(response, "usage", None)
@@ -70,15 +71,15 @@ class GroqProvider(BaseProvider):
             completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
             total_tokens = getattr(usage, "total_tokens", None) if usage else None
             
-            # Log Groq request id, latency, and tokens
-            logger.info(f"[DEBUG LOG] Groq Request ID: {request_id}")
-            logger.info(f"[DEBUG LOG] Latency (Response Time): {duration:.4f}s")
-            logger.info(f"[DEBUG LOG] Prompt Tokens: {prompt_tokens}")
-            logger.info(f"[DEBUG LOG] Completion Tokens: {completion_tokens}")
-            logger.info(f"[DEBUG LOG] Total Tokens: {total_tokens}")
-            logger.info(f"[DEBUG LOG] Groq Response Received: '{reply_text}'")
+            # Log structured summary without logging sensitive prompts or auth
+            logger.info(
+                f"[MODEL_RESPONSE_RECEIVED] provider=groq model={self.model} request_id={request_id} "
+                f"rawLength={len(reply_text)} promptTokens={prompt_tokens} completionTokens={completion_tokens} "
+                f"totalTokens={total_tokens} duration={duration:.4f}s"
+            )
             
             return reply_text
+
         except Exception as e:
             duration = time.perf_counter() - start_time
             status = getattr(e, "status_code", None)

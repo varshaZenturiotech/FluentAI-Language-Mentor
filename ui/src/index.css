@@ -111,6 +111,37 @@
   animation: pulse-ring 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* Mic Idle Soft Inviting Pulse Rings */
+@keyframes mic-invite-ring-1 {
+  0% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.35); opacity: 0.25; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+@keyframes mic-invite-ring-2 {
+  0% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.5); opacity: 0.15; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+.animate-mic-invite-1 {
+  animation: mic-invite-ring-1 2.2s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+}
+
+.animate-mic-invite-2 {
+  animation: mic-invite-ring-2 2.2s cubic-bezier(0, 0.2, 0.8, 1) infinite 0.7s;
+}
+
+/* Energetic Recording Pulse Rings */
+@keyframes mic-recording-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.25); opacity: 0.35; }
+}
+
+.animate-mic-recording {
+  animation: mic-recording-pulse 1.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
 .animate-spin-slow {
   animation: spin-slow 12s linear infinite;
 }

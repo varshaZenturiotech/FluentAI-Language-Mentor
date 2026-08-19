@@ -3,25 +3,72 @@ import { Message } from '../../types/chat';
 import { GrammarCorrectionCard } from './GrammarCorrectionCard';
 import { VocabularyCard } from './VocabularyCard';
 import { Volume2, Languages, Bot, User, Sparkles } from 'lucide-react';
+import { sanitizeForTTS } from '../../utils/ttsSanitizer';
 
 interface ChatBubbleProps {
   message: Message;
+  isPlaying?: boolean;
+  onPlayAudio?: (message: Message) => void;
 }
 
-export const ChatBubble: React.FC<ChatBubbleProps> = ({ message }) => {
+export const FormattedMarkdownText: React.FC<{ text: string }> = ({ text }) => {
+  if (!text) return null;
+
+  const parts: React.ReactNode[] = [];
+  const regex = /(\*\*(.*?)\*\*|__(.*?)__|`([^`]+)`|\*(.*?)\*|_(.*?)_)/g;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const matchIndex = match.index;
+    if (matchIndex > lastIndex) {
+      parts.push(text.slice(lastIndex, matchIndex));
+    }
+
+    if (match[2] || match[3]) {
+      const content = match[2] || match[3];
+      parts.push(<strong key={matchIndex} className="font-semibold text-indigo-950">{content}</strong>);
+    } else if (match[4]) {
+      parts.push(<code key={matchIndex} className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-indigo-700">{match[4]}</code>);
+    } else if (match[5] || match[6]) {
+      const content = match[5] || match[6];
+      parts.push(<em key={matchIndex} className="italic">{content}</em>);
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return <>{parts.length > 0 ? parts : text}</>;
+};
+
+export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isPlaying, onPlayAudio }) => {
   const isUser = message.sender === 'user';
   const [showTranslation, setShowTranslation] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [internalIsPlaying, setInternalIsPlaying] = useState(false);
+
+  const isPlayingAudio = isPlaying !== undefined ? isPlaying : internalIsPlaying;
 
   const handlePlayAudio = () => {
-    setIsPlayingAudio(true);
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(message.text);
-      utterance.rate = 0.95;
-      utterance.onend = () => setIsPlayingAudio(false);
-      window.speechSynthesis.speak(utterance);
+    if (onPlayAudio) {
+      onPlayAudio(message);
     } else {
-      setTimeout(() => setIsPlayingAudio(false), 1500);
+      setInternalIsPlaying(true);
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const textToSpeak = sanitizeForTTS(message.text);
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utterance.rate = 0.95;
+        utterance.onend = () => setInternalIsPlaying(false);
+        utterance.onerror = () => setInternalIsPlaying(false);
+        window.speechSynthesis.speak(utterance);
+      } else {
+        setTimeout(() => setInternalIsPlaying(false), 1500);
+      }
     }
   };
 
@@ -55,7 +102,9 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message }) => {
               : 'glass-card text-slate-800 rounded-tl-none border-slate-200/80'
           }`}
         >
-          <p className="font-medium whitespace-pre-wrap">{message.text}</p>
+          <p className="font-medium whitespace-pre-wrap">
+            <FormattedMarkdownText text={message.text} />
+          </p>
 
           {/* Controls Bar for AI Message */}
           {!isUser && (

@@ -65,6 +65,23 @@ export class LearningProfileService {
     
     // Save/update baseline skills if provided
     if (dto.baselineSkills) {
+      const existingAssessment = await prisma.learnerAssessment.findUnique({
+        where: { userId },
+      });
+
+      const updateSkills = existingAssessment?.completed
+        ? {}
+        : {
+            grammar: dto.baselineSkills.grammar,
+            vocabulary: dto.baselineSkills.vocabulary,
+            reading: dto.baselineSkills.reading,
+            speaking: dto.baselineSkills.speaking,
+            listening: dto.baselineSkills.listening,
+            writing: dto.baselineSkills.writing,
+            pronunciation: dto.baselineSkills.pronunciation,
+            fluency: dto.baselineSkills.fluency,
+          };
+
       await prisma.learnerAssessment.upsert({
         where: { userId },
         create: {
@@ -78,22 +95,7 @@ export class LearningProfileService {
           pronunciation: dto.baselineSkills.pronunciation,
           fluency: dto.baselineSkills.fluency,
         },
-        update: {
-          // Only update self-assessment sliders if the objective assessment is NOT already completed.
-          // This preserves actual AI-measured scores from a prior Baseline Assessment.
-          ...(await prisma.learnerAssessment.findUnique({ where: { userId } }).then(existing =>
-            existing?.completed ? {} : {
-              grammar: dto.baselineSkills!.grammar,
-              vocabulary: dto.baselineSkills!.vocabulary,
-              reading: dto.baselineSkills!.reading,
-              speaking: dto.baselineSkills!.speaking,
-              listening: dto.baselineSkills!.listening,
-              writing: dto.baselineSkills!.writing,
-              pronunciation: dto.baselineSkills!.pronunciation,
-              fluency: dto.baselineSkills!.fluency,
-            }
-          )),
-        }
+        update: updateSkills,
       });
     }
 
@@ -322,4 +324,122 @@ export class LearningProfileService {
       nextStep: learningProfileExists ? 'VIEW_STUDY_PLAN' : 'COMPLETE_ONBOARDING',
     };
   }
+
+  async handleConversationalAssessmentTurn(
+    userId: string,
+    history: Array<{ role: string; content: string }>,
+    turnCount: number,
+    userMessage: string,
+    targetLevel?: string,
+    audioFile?: Express.Multer.File
+  ): Promise<any> {
+    if (!userId) {
+      throw new ApiError(HttpStatusCodes.UNAUTHORIZED, 'Authentication required');
+    }
+
+    // 1. Check existing learning profile & assessment status
+    const profile = await prisma.learningProfile.findUnique({ where: { userId } });
+    const learningProfileExists = !!profile;
+
+    // 2. Transcribe audio if provided
+    let resolvedUserMessage = userMessage || '';
+    if (audioFile) {
+      try {
+        const speechRes = await fastApiClient.speech(audioFile, 'en', undefined, userId);
+        if (speechRes?.transcript) {
+          resolvedUserMessage = speechRes.transcript;
+        }
+      } catch (err) {
+        console.error('Failed to transcribe assessment audio turn:', err);
+      }
+    }
+
+    // 3. Request next conversational turn from AI Gateway
+    const response = await fastApiClient.conversationalAssessmentNext({
+      history,
+      turnCount,
+      userMessage: resolvedUserMessage,
+      targetLevel: targetLevel || 'unknown'
+    }, undefined, userId);
+
+    if (!response) {
+      throw new ApiError(HttpStatusCodes.INTERNAL_SERVER_ERROR, 'Failed to process conversational assessment turn.');
+    }
+
+    // Attach transcribed user message to response so UI displays it in ChatBubble
+    response.resolvedUserMessage = resolvedUserMessage;
+
+    // 4. Handle Completion & Persistence
+    if (response.isCompleted && response.evaluation) {
+      const evalData = response.evaluation;
+      const strengths = evalData.strengths || [];
+      const weaknesses = evalData.weaknesses || [];
+
+      // Check if assessment was already completed to ensure idempotency
+      const existingAssessment = await prisma.learnerAssessment.findUnique({ where: { userId } });
+      const alreadyCompleted = existingAssessment?.completed ?? false;
+
+      await prisma.learnerAssessment.upsert({
+        where: { userId },
+        create: {
+          userId,
+          actualGrammar: evalData.grammar?.score || 70,
+          actualVocabulary: evalData.vocabulary?.score || 70,
+          actualReading: evalData.reading?.score || 70,
+          actualListening: evalData.listening?.score || 70,
+          actualWriting: evalData.writing?.score || 70,
+          actualSpeaking: evalData.speaking?.score || 70,
+          actualPronunciation: evalData.pronunciation?.score || 0,
+          actualFluency: evalData.fluency?.score || 70,
+          actualStrengths: JSON.stringify(strengths),
+          actualWeaknesses: JSON.stringify(weaknesses),
+          actualLevel: evalData.overallLevel || response.estimatedLevel || 'B1',
+          actualScore: evalData.overallScore || 70,
+          completed: true,
+          metadata: JSON.stringify({
+            method: 'conversational',
+            totalTurns: turnCount + 1,
+            timestamp: new Date().toISOString(),
+          }),
+        },
+        update: {
+          actualGrammar: evalData.grammar?.score || 70,
+          actualVocabulary: evalData.vocabulary?.score || 70,
+          actualReading: evalData.reading?.score || 70,
+          actualListening: evalData.listening?.score || 70,
+          actualWriting: evalData.writing?.score || 70,
+          actualSpeaking: evalData.speaking?.score || 70,
+          actualPronunciation: evalData.pronunciation?.score || 0,
+          actualFluency: evalData.fluency?.score || 70,
+          actualStrengths: JSON.stringify(strengths),
+          actualWeaknesses: JSON.stringify(weaknesses),
+          actualLevel: evalData.overallLevel || response.estimatedLevel || 'B1',
+          actualScore: evalData.overallScore || 70,
+          completed: true,
+          metadata: JSON.stringify({
+            method: 'conversational',
+            totalTurns: turnCount + 1,
+            timestamp: new Date().toISOString(),
+          }),
+        },
+      });
+
+      // 5. Trigger study plan generation safely (idempotently) if profile exists
+      if (learningProfileExists && !alreadyCompleted) {
+        try {
+          await studyPlanService.generatePlan(userId);
+        } catch (planError) {
+          console.error('Failed to generate adaptive study plan:', planError);
+        }
+      }
+
+      response.assessmentSaved = true;
+      response.learningProfileExists = learningProfileExists;
+      response.onboardingCompleted = learningProfileExists ? (profile?.onboardingCompleted ?? false) : false;
+      response.nextStep = learningProfileExists ? 'VIEW_STUDY_PLAN' : 'COMPLETE_ONBOARDING';
+    }
+
+    return response;
+  }
 }
+

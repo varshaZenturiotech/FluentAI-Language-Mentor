@@ -3,8 +3,13 @@ import os
 from app.schemas.chat import ChatRequest, ChatResponse, LessonInitRequest
 from app.providers.groq_provider import GroqProvider
 from app.core.exceptions import LLMProviderException
+from app.utils.sanitizer import sanitize_ai_response
 
 logger = logging.getLogger("app.services.chat_service")
+
+DEFAULT_CHAT_FALLBACK = "I understand! Could you share a bit more about that so we can continue practicing?"
+
+DEFAULT_INIT_FALLBACK = "Welcome to your English lesson today! I am excited to practice speaking with you. What would you like to talk about?"
 
 class ChatService:
     """Business logic service for managing AI Mentor chat completions and lesson initialization.
@@ -167,7 +172,27 @@ class ChatService:
 
         return blocks
 
-    async def process_chat(self, request: ChatRequest, user_id: str = None) -> ChatResponse:
+    def _extract_and_sanitize(self, raw_reply: str, request: any) -> tuple[str, bool, list[str]]:
+        lesson_complete = False
+        completed_objectives = []
+
+        reply_text = raw_reply or ""
+        if "[LESSON_COMPLETE" in reply_text:
+            parts = reply_text.split("[LESSON_COMPLETE")
+            clean_reply = parts[0].strip()
+            marker_raw = parts[1].rstrip("]").strip(" :")
+            lesson_complete = True
+            if marker_raw:
+                completed_objectives = [o.strip() for o in marker_raw.split("|") if o.strip()]
+            elif hasattr(request, "lessonContext") and request.lessonContext and "objectives" in request.lessonContext:
+                objs = request.lessonContext.get("objectives", [])
+                completed_objectives = objs if isinstance(objs, list) else [str(objs)]
+            reply_text = clean_reply
+
+        reply_text = sanitize_ai_response(reply_text)
+        return reply_text, lesson_complete, completed_objectives
+
+    async def process_chat(self, request: ChatRequest, user_id: str = None, request_id: str = None) -> ChatResponse:
         """Coordinates system prompt loading, messages formatting, and querying the provider."""
         base_prompt = self._load_prompt_file("chat_system.txt")
         mentor_behavior = self._load_prompt_file("mentor_behavior.txt")
@@ -205,30 +230,67 @@ class ChatService:
         if not messages or messages[-1]["content"] != request.message:
             messages.append({"role": "user", "content": request.message})
         
-        logger.debug(f"Processing chat session={request.sessionId} | language={request.language}")
+        logger.debug(f"Processing chat session={request.sessionId} | reqId={request_id} | language={request.language}")
         
-        reply_text = await self.provider.complete(
+        # 1. Primary completion request with max_tokens=1024
+        raw_reply = await self.provider.complete(
             system_prompt=system_prompt,
             messages=messages,
-            temperature=0.7
+            temperature=0.7,
+            max_tokens=1024
         )
 
-        lesson_complete = False
-        completed_objectives = []
+        reply_text, lesson_complete, completed_objectives = self._extract_and_sanitize(raw_reply, request)
+        has_think = "<think>" in raw_reply.lower()
+        has_closing_think = "</think>" in raw_reply.lower()
+        is_valid = bool(reply_text and reply_text.strip())
 
-        # Parse [LESSON_COMPLETE: ...] marker if emitted by LLM during Study Plan lesson
-        if "[LESSON_COMPLETE" in reply_text:
-            parts = reply_text.split("[LESSON_COMPLETE")
-            clean_reply = parts[0].strip()
-            marker_raw = parts[1].rstrip("]").strip(" :")
-            lesson_complete = True
-            if marker_raw:
-                completed_objectives = [o.strip() for o in marker_raw.split("|") if o.strip()]
-            elif request.lessonContext and "objectives" in request.lessonContext:
-                objs = request.lessonContext.get("objectives", [])
-                completed_objectives = objs if isinstance(objs, list) else [str(objs)]
-            reply_text = clean_reply
-            logger.info(f"[LESSON_COMPLETE_DETECTED] AI signaled completion for session={request.sessionId} | objectives={completed_objectives}")
+        logger.info(
+            f"[AI_RESPONSE_VALIDATION] requestId={request_id} sessionId={request.sessionId} "
+            f"rawLength={len(raw_reply)} sanitizedLength={len(reply_text)} "
+            f"hasThinkTag={has_think} hasClosingThinkTag={has_closing_think} valid={is_valid} retryCount=0"
+        )
+
+        # 2. Controlled Retry if sanitized output is empty or unusable
+        if not is_valid:
+            logger.warning(
+                f"[AI_RESPONSE_RETRY] Initial completion produced empty/unusable reply after sanitization. "
+                f"Initiating controlled retry | requestId={request_id} sessionId={request.sessionId}"
+            )
+            
+            retry_prompt = system_prompt + "\n\nCRITICAL RETRY INSTRUCTION: Provide ONLY your direct mentor reply. Do NOT output <think> tags or reasoning."
+            retry_raw = await self.provider.complete(
+                system_prompt=retry_prompt,
+                messages=messages,
+                temperature=0.5,
+                max_tokens=1024
+            )
+
+            
+            reply_text, lesson_complete, completed_objectives = self._extract_and_sanitize(retry_raw, request)
+            retry_valid = bool(reply_text and reply_text.strip())
+            
+            logger.info(
+                f"[AI_RESPONSE_VALIDATION] requestId={request_id} sessionId={request.sessionId} "
+                f"rawLength={len(retry_raw)} sanitizedLength={len(reply_text)} "
+                f"hasThinkTag={'<think>' in retry_raw.lower()} hasClosingThinkTag={'</think>' in retry_raw.lower()} "
+                f"valid={retry_valid} retryCount=1"
+            )
+
+            # 3. Fallback Mechanism if retry also fails
+            if not retry_valid:
+                logger.error(
+                    f"[AI_RESPONSE_FALLBACK] Controlled retry failed to produce valid reply. Applying safe fallback. "
+                    f"requestId={request_id} sessionId={request.sessionId}"
+                )
+                reply_text = DEFAULT_CHAT_FALLBACK
+                lesson_complete = False
+                completed_objectives = []
+
+        if len(reply_text) > 1200:
+            logger.warning(
+                f"[AIGATEWAY] Suspiciously large cleaned response | char_count={len(reply_text)} | session={request.sessionId}"
+            )
 
         return ChatResponse(
             reply=reply_text,
@@ -238,8 +300,7 @@ class ChatService:
             completedObjectives=completed_objectives
         )
 
-
-    async def process_lesson_init(self, request: LessonInitRequest, user_id: str = None) -> ChatResponse:
+    async def process_lesson_init(self, request: LessonInitRequest, user_id: str = None, request_id: str = None) -> ChatResponse:
         """Generates the initial mentor message for a new study plan lesson using full learner context."""
         base_prompt = self._load_prompt_file("chat_system.txt")
         mentor_behavior = self._load_prompt_file("mentor_behavior.txt")
@@ -265,7 +326,6 @@ class ChatService:
 
         system_prompt = "\n\n".join(system_prompt_parts)
 
-        # Single instruction message to trigger AI-initiated greeting
         messages = [
             {
                 "role": "user",
@@ -273,19 +333,58 @@ class ChatService:
             }
         ]
 
-        logger.info(f"Generating AI initial lesson greeting for session={request.sessionId}")
+        logger.info(f"Generating AI initial lesson greeting for session={request.sessionId} | reqId={request_id}")
         
-        reply_text = await self.provider.complete(
+        raw_reply = await self.provider.complete(
             system_prompt=system_prompt,
             messages=messages,
-            temperature=0.7
+            temperature=0.7,
+            max_tokens=512
         )
+
+        reply_text = sanitize_ai_response(raw_reply)
+        is_valid = bool(reply_text and reply_text.strip())
+
+        logger.info(
+            f"[AI_RESPONSE_VALIDATION] requestId={request_id} sessionId={request.sessionId} "
+            f"rawLength={len(raw_reply)} sanitizedLength={len(reply_text)} "
+            f"hasThinkTag={'<think>' in raw_reply.lower()} hasClosingThinkTag={'</think>' in raw_reply.lower()} "
+            f"valid={is_valid} retryCount=0"
+        )
+
+        if not is_valid:
+            logger.warning(f"[AI_RESPONSE_RETRY] Retrying lesson init completion | reqId={request_id} sessionId={request.sessionId}")
+            retry_prompt = system_prompt + "\n\nCRITICAL RETRY INSTRUCTION: Provide ONLY your direct opening mentor message. Do NOT output <think> tags."
+            retry_raw = await self.provider.complete(
+                system_prompt=retry_prompt,
+                messages=messages,
+                temperature=0.5,
+                max_tokens=512
+            )
+            reply_text = sanitize_ai_response(retry_raw)
+            retry_valid = bool(reply_text and reply_text.strip())
+            
+            logger.info(
+                f"[AI_RESPONSE_VALIDATION] requestId={request_id} sessionId={request.sessionId} "
+                f"rawLength={len(retry_raw)} sanitizedLength={len(reply_text)} "
+                f"valid={retry_valid} retryCount=1"
+            )
+
+            if not retry_valid:
+                logger.error(f"[AI_RESPONSE_FALLBACK] Using lesson init fallback | reqId={request_id} sessionId={request.sessionId}")
+                reply_text = DEFAULT_INIT_FALLBACK
+
+        if len(reply_text) > 1200:
+            logger.warning(
+                f"[AIGATEWAY] Suspiciously large cleaned initial lesson response | char_count={len(reply_text)} | session={request.sessionId}"
+            )
 
         return ChatResponse(
             reply=reply_text,
             provider="groq",
             model=self.provider.model
         )
+
 
 # Singleton service instance
 chat_service = ChatService()

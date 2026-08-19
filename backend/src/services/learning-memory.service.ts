@@ -4,21 +4,55 @@ import { logger } from '../utils/logger';
 
 export class LearningMemoryService {
   /**
+   * Per-session job queues for serializing analysis runs
+   * Note: sessionJobQueues provides process-local in-memory serialization.
+   * If scaling horizontally across multiple Node instances, a distributed lock (e.g. Redis) is required.
+   */
+  private readonly sessionJobQueues = new Map<string, Promise<void>>();
+
+  /**
    * Queue analysis job asynchronously
    */
-  public queueAnalysisJob(userId: string, sessionId: string, studyPlanDayId?: string): void {
-    logger.info(`Queued AI Session Analysis Job for session: ${sessionId}, user: ${userId}`);
-    // Execute asynchronously in background
-    this.analyzeSessionInBackground(userId, sessionId, studyPlanDayId).catch((err) => {
-      logger.error('Failed to run background AI Session Analysis:', { error: err.message || err });
+  public async queueAnalysisJob(
+    userId: string,
+    sessionId: string,
+    studyPlanDayId?: string,
+    isFinal: boolean = false
+  ): Promise<void> {
+    logger.info(`Queued AI Session Analysis Job (isFinal=${isFinal}) for session: ${sessionId}, user: ${userId}`);
+
+    const existingPromise = this.sessionJobQueues.get(sessionId) || Promise.resolve();
+
+    const newPromise = (async () => {
+      try {
+        await existingPromise;
+      } catch (err) {
+        // Ignore errors from previous job in queue
+      }
+      await this.analyzeSessionInBackground(userId, sessionId, studyPlanDayId, isFinal);
+    })();
+
+    this.sessionJobQueues.set(sessionId, newPromise);
+
+    newPromise.finally(() => {
+      if (this.sessionJobQueues.get(sessionId) === newPromise) {
+        this.sessionJobQueues.delete(sessionId);
+      }
     });
+
+    return newPromise;
   }
 
   /**
    * Background runner for session analysis
    */
-  private async analyzeSessionInBackground(userId: string, sessionId: string, studyPlanDayId?: string): Promise<void> {
-    logger.info(`Starting background analysis for session: ${sessionId}`);
+  private async analyzeSessionInBackground(
+    userId: string,
+    sessionId: string,
+    studyPlanDayId?: string,
+    isFinal: boolean = false
+  ): Promise<void> {
+    logger.info(`Starting background analysis (isFinal=${isFinal}) for session: ${sessionId}`);
 
     // 1. Fetch Session and Messages
     const session = await prisma.conversationSession.findUnique({
@@ -31,14 +65,12 @@ export class LearningMemoryService {
       return;
     }
 
-    // Prevent duplicate analysis and duplicate XP awards
+    // Check if session was already finalized in DB
+    const wasAlreadyFinalized = session.status === 'COMPLETED';
+
     const existingSession = await prisma.learningSession.findFirst({
       where: { sessionId },
     });
-    if (existingSession || session.status === 'COMPLETED') {
-      logger.warn(`Session ${sessionId} has already been analyzed/completed. Skipping duplicate analysis.`);
-      return;
-    }
 
     // 2. Fetch User Profile
     const profile = await prisma.learningProfile.findUnique({
@@ -132,36 +164,67 @@ export class LearningMemoryService {
       vocabulary: newWords.slice(0, 5),
     });
 
-    // 9. Save Learning Session Record
-    const learningSessionRecord = await prisma.learningSession.create({
-      data: {
-        userId,
-        sessionId,
-        studyPlanDayId: studyPlanDayId || null,
-        studyMinutes,
-        grammarScore,
-        vocabularyScore,
-        fluencyScore,
-        confidenceScore,
-        pronunciationScore,
-        lessonCompletionPercentage: lessonCompletion,
-        completedTasks: completedObjectives.join(', '),
-        weakTopics: JSON.stringify(weakTopics),
-        newWords: JSON.stringify(newWords),
-        recommendations: recommendationsText,
-      },
-    });
-    logger.info(`Successfully created learning session record: ${learningSessionRecord.id}`);
+    // 9. Save or update Learning Session Record
+    let learningSessionRecord;
+    if (existingSession) {
+      learningSessionRecord = await prisma.learningSession.update({
+        where: { id: existingSession.id },
+        data: {
+          studyPlanDayId: studyPlanDayId || existingSession.studyPlanDayId,
+          studyMinutes,
+          grammarScore,
+          vocabularyScore,
+          fluencyScore,
+          confidenceScore,
+          pronunciationScore,
+          lessonCompletionPercentage: lessonCompletion,
+          completedTasks: completedObjectives.join(', '),
+          weakTopics: JSON.stringify(weakTopics),
+          newWords: JSON.stringify(newWords),
+          recommendations: recommendationsText,
+        },
+      });
+      logger.info(`Successfully updated learning session record: ${learningSessionRecord.id}`);
+    } else {
+      learningSessionRecord = await prisma.learningSession.create({
+        data: {
+          userId,
+          sessionId,
+          studyPlanDayId: studyPlanDayId || null,
+          studyMinutes,
+          grammarScore,
+          vocabularyScore,
+          fluencyScore,
+          confidenceScore,
+          pronunciationScore,
+          lessonCompletionPercentage: lessonCompletion,
+          completedTasks: completedObjectives.join(', '),
+          weakTopics: JSON.stringify(weakTopics),
+          newWords: JSON.stringify(newWords),
+          recommendations: recommendationsText,
+        },
+      });
+      logger.info(`Successfully created learning session record: ${learningSessionRecord.id}`);
+    }
 
     // 10. Update study duration on the conversation session itself
-    await prisma.conversationSession.update({
-      where: { id: sessionId },
-      data: {
-        durationMinutes: studyMinutes,
-        status: 'COMPLETED',
-        endedAt: new Date(),
-      },
-    });
+    if (isFinal) {
+      await prisma.conversationSession.update({
+        where: { id: sessionId },
+        data: {
+          durationMinutes: studyMinutes,
+          status: 'COMPLETED',
+          endedAt: new Date(),
+        },
+      });
+    } else {
+      await prisma.conversationSession.update({
+        where: { id: sessionId },
+        data: {
+          durationMinutes: studyMinutes,
+        },
+      });
+    }
 
     // 11. Save Grammar Mistakes (GrammarMistake table)
     if (grammarMistakes && grammarMistakes.length > 0) {
@@ -264,13 +327,13 @@ export class LearningMemoryService {
 
     // Check completion criteria:
     // AI marks lesson completed (e.g. analysisResult.completed === true or lessonCompletion >= 80)
-    // AND user has sent at least 4 messages
+    // AND user has sent at least 4 messages AND isFinal is true!
     const isAiCompleted = analysisResult.completed === true || Number(analysisResult.lessonCompletion) >= 80;
-    const isCompleted = isAiCompleted && userMessagesCount >= 4;
+    const isCompleted = isFinal && isAiCompleted && userMessagesCount >= 4;
 
     // 14. Unlock Study Plan Day Tasks & recalculate study plan completion percentage
     let isDayCompleted = false;
-    if (studyPlanDayId && isCompleted) {
+    if (studyPlanDayId && isCompleted && !wasAlreadyFinalized) {
       const currentDay = await prisma.studyPlanDay.findUnique({
         where: { id: studyPlanDayId },
       });
@@ -301,18 +364,25 @@ export class LearningMemoryService {
         where: { userId, dayId: studyPlanDayId },
       });
       if (lessonSession) {
+        const isNowCompleted = isCompleted || lessonSession.status === 'COMPLETED';
         await prisma.lessonSession.update({
           where: { id: lessonSession.id },
           data: {
-            status: isCompleted ? 'COMPLETED' : 'IN_PROGRESS',
-            completedAt: isCompleted ? new Date() : null,
+            status: isNowCompleted ? 'COMPLETED' : 'IN_PROGRESS',
+            completedAt: isNowCompleted ? (lessonSession.completedAt || new Date()) : null,
             duration: studyMinutes,
             completionPercentage: Number(analysisResult.lessonCompletion) || 0.0,
             aiSummary: analysisResult.recommendation || '',
-            xpEarned: isCompleted ? 20 : 0, // award XP only if completed
+            xpEarned: isNowCompleted ? 20 : 0,
           },
         });
       }
+    }
+
+    // 15. XP calculation - ONLY award XP if isFinal === true AND session was not already finalized!
+    if (!isFinal || wasAlreadyFinalized) {
+      logger.info(`Skipping XP award for session ${sessionId} (isFinal=${isFinal}, wasAlreadyFinalized=${wasAlreadyFinalized})`);
+      return;
     }
 
     // 15. XP calculation
@@ -488,7 +558,7 @@ export class LearningMemoryService {
       for (const obj of completedObjectives) {
         if (!obj || typeof obj !== 'string' || obj.trim() === '') continue;
         const cleanObj = obj.trim();
-        
+
         const existingMastery = await prisma.objectiveMastery.findUnique({
           where: { userId_objective: { userId, objective: cleanObj } },
         });
@@ -645,7 +715,7 @@ export class LearningMemoryService {
     const totalMinutes = progress ? progress.totalMinutes : sessions.reduce((sum, s) => sum + s.studyMinutes, 0);
     const totalHours = Math.floor(totalMinutes / 60);
     const remainingMinutes = totalMinutes % 60;
-    const studyTimeString = totalHours > 0 
+    const studyTimeString = totalHours > 0
       ? `${totalHours} Hour${totalHours > 1 ? 's' : ''} ${remainingMinutes} Minute${remainingMinutes !== 1 ? 's' : ''}`
       : `${remainingMinutes} Minute${remainingMinutes !== 1 ? 's' : ''}`;
 
@@ -705,7 +775,7 @@ export class LearningMemoryService {
       for (let w = 1; w <= totalWeeks; w++) {
         const weekDays = days.filter(d => d.dayNumber > (w - 1) * 7 && d.dayNumber <= w * 7);
         const completedWeekDays = weekDays.filter(d => d.status === 'COMPLETED');
-        
+
         let weekStatus = 'UPCOMING';
         if (completedWeekDays.length === weekDays.length) {
           weekStatus = 'COMPLETED';
@@ -714,7 +784,7 @@ export class LearningMemoryService {
         }
 
         const weekCompletion = weekDays.length > 0 ? Math.round((completedWeekDays.length / weekDays.length) * 100) : 0;
-        
+
         // Sum XP and study time from sessions matching this week's days
         const weekDayIds = weekDays.map(d => d.id);
         const weekSessions = sessions.filter(s => s.studyPlanDayId && weekDayIds.includes(s.studyPlanDayId));
@@ -738,7 +808,7 @@ export class LearningMemoryService {
     const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const today = new Date();
     const last7DaysLogs: any[] = [];
-    
+
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(today.getDate() - i);

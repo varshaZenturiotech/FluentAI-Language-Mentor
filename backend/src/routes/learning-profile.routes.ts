@@ -21,4 +21,8 @@ router.put('/', authenticate, validateLearningProfile, learningProfileController
 // POST /api/v1/learning-profile/baseline-assessment
 router.post('/baseline-assessment', authenticate, upload.single('file'), learningProfileController.submitBaselineAssessment);
 
+// POST /api/v1/learning-profile/baseline-assessment/turn
+router.post('/baseline-assessment/turn', authenticate, upload.single('file'), learningProfileController.handleConversationalTurn);
+
 export default router;
+

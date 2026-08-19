@@ -76,6 +76,48 @@ export class LearningProfileController {
       next(error);
     }
   };
+
+  handleConversationalTurn = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!req.user?.id) {
+        next(ApiError.unauthorized('Authentication required.'));
+        return;
+      }
+
+      const userId = req.user.id;
+      const file = req.file;
+
+      let history = [];
+      if (req.body.history) {
+        try {
+          history = typeof req.body.history === 'string' ? JSON.parse(req.body.history) : req.body.history;
+        } catch {
+          history = [];
+        }
+      }
+
+      const turnCount = parseInt(req.body.turnCount || '0', 10);
+      const userMessage = req.body.userMessage || '';
+      const targetLevel = req.body.targetLevel || 'unknown';
+
+      const result = await this.learningProfileService.handleConversationalAssessmentTurn(
+        userId,
+        history,
+        turnCount,
+        userMessage,
+        targetLevel,
+        file
+      );
+
+      res.status(HttpStatusCodes.OK).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 
 export const learningProfileController = new LearningProfileController();
+

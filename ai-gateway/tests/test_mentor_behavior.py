@@ -8,7 +8,7 @@ def chat_service():
     with patch("app.services.chat_service.GroqProvider") as mock_provider_class:
         mock_provider = mock_provider_class.return_value
         mock_provider.complete = AsyncMock(return_value="Hello! I am your English Language Mentor.")
-        mock_provider.model = "llama3-8b-8192"
+        mock_provider.model = "llama-3.1-70b-versatile"
         service = ChatService()
         yield service, mock_provider
 

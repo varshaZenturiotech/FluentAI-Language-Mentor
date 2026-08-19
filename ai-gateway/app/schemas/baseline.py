@@ -35,3 +35,25 @@ class EvaluateBaselineResponse(BaseModel):
     strengths: List[str] = Field(default_factory=list, description="Top overall strengths")
     weaknesses: List[str] = Field(default_factory=list, description="Top overall weaknesses")
     assessmentStatus: str = Field("completed", description="Status of the evaluation: completed, incomplete, error")
+
+
+class ConversationalTurnMessage(BaseModel):
+    role: str = Field(..., description="Role of the speaker: assistant or user")
+    content: str = Field(..., description="Content of the message")
+
+
+class ConversationalAssessmentRequest(BaseModel):
+    history: List[ConversationalTurnMessage] = Field(default_factory=list, description="Previous conversation turns")
+    turnCount: int = Field(default=0, description="Current turn count")
+    userMessage: str = Field(default="", description="Latest user message (text or STT)")
+    targetLevel: Optional[str] = Field(default="unknown", description="Target English level if specified")
+
+
+class ConversationalAssessmentResponse(BaseModel):
+    message: str = Field(..., description="AI mentor's response or question")
+    isCompleted: bool = Field(..., description="Whether the baseline assessment is complete")
+    turnCount: int = Field(..., description="Updated turn count")
+    estimatedLevel: Optional[str] = Field(default=None, description="Current estimated CEFR level")
+    coveredSkills: List[str] = Field(default_factory=list, description="Skills evaluated/covered so far")
+    evaluation: Optional[EvaluateBaselineResponse] = Field(default=None, description="Final evaluation report when completed")
+

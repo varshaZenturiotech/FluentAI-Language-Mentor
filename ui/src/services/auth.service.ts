@@ -3,8 +3,8 @@ import { delay } from './apiClient';
 
 const MOCK_USER: User = {
   id: 'user_12345',
-  name: 'Rahul Nair',
-  email: 'rahul.@fluentai.app',
+  name: 'Rahul',
+  email: 'rahul@fluentai.app',
   avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80',
   nativeLanguage: 'Malayalam',
   learningLanguage: 'English',

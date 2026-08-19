@@ -433,6 +433,35 @@ export class FastApiClient implements IFastApiClient {
       this.handleError(error);
     }
   }
+
+  async conversationalAssessmentNext(
+    payload: {
+      history: Array<{ role: string; content: string }>;
+      turnCount: number;
+      userMessage: string;
+      targetLevel?: string;
+    },
+    requestId?: string,
+    userId?: string
+  ): Promise<any> {
+    const startTime = Date.now();
+    logger.info(`Sending Conversational Assessment Next Request to FastAPI | turnCount: ${payload.turnCount} | reqId: ${requestId}`);
+
+    try {
+      const response = await this.executeWithRetry(async () => {
+        return this.client.post('/api/v1/learning/conversational-assessment/next', payload, {
+          headers: this.getHeaders(requestId, userId),
+        });
+      });
+
+      const latency = Date.now() - startTime;
+      logger.info(`FastAPI Conversational Assessment Next Success | latency: ${latency}ms | status: ${response.status}`);
+      return response.data.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
 }
 
 export const fastApiClient = new FastApiClient();
+

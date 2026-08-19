@@ -87,4 +87,15 @@ export interface IFastApiClient {
     requestId?: string,
     userId?: string
   ): Promise<any>;
+  conversationalAssessmentNext(
+    payload: {
+      history: Array<{ role: string; content: string }>;
+      turnCount: number;
+      userMessage: string;
+      targetLevel?: string;
+    },
+    requestId?: string,
+    userId?: string
+  ): Promise<any>;
 }
+

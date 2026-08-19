@@ -65,4 +65,14 @@ export const learningProfileApi = {
     });
     return response.data.data;
   },
+
+  async submitConversationalTurn(formData: FormData): Promise<any> {
+    const response = await apiClient.post('/learning-profile/baseline-assessment/turn', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data.data;
+  },
 };
+

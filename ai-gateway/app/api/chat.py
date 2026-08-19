@@ -11,21 +11,22 @@ logger = logging.getLogger("app.api.chat")
 @router.post("/chat", response_model=ApiResponse[ChatResponse])
 async def chat(
     request: ChatRequest,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id")
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id")
 ) -> ApiResponse[ChatResponse]:
     """Exposes POST /api/v1/chat for language mentor conversation."""
     start_time = time.perf_counter()
     
     logger.info(
-        f"POST /api/v1/chat | sessionId: {request.sessionId} | "
+        f"POST /api/v1/chat | sessionId: {request.sessionId} | reqId: {x_request_id} | "
         f"language: {request.language} | message_len: {len(request.message)} chars"
     )
     
-    response_data = await chat_service.process_chat(request, user_id=x_user_id)
+    response_data = await chat_service.process_chat(request, user_id=x_user_id, request_id=x_request_id)
     
     duration = time.perf_counter() - start_time
     logger.info(
-        f"Chat turn completed | sessionId: {request.sessionId} | "
+        f"[AI_RESPONSE_SENT] Chat turn completed | sessionId: {request.sessionId} | reqId: {x_request_id} | "
         f"provider: {response_data.provider} | model: {response_data.model} | "
         f"duration: {duration:.4f}s"
     )
@@ -40,21 +41,23 @@ async def chat(
 @router.post("/lesson-init", response_model=ApiResponse[ChatResponse])
 async def init_lesson(
     request: LessonInitRequest,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id")
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id")
 ) -> ApiResponse[ChatResponse]:
     """Exposes POST /api/v1/chat/lesson-init for AI-initiated study plan lesson greetings."""
     start_time = time.perf_counter()
     
-    logger.info(f"POST /api/v1/chat/lesson-init | sessionId: {request.sessionId} | language: {request.language}")
+    logger.info(f"POST /api/v1/chat/lesson-init | sessionId: {request.sessionId} | reqId: {x_request_id} | language: {request.language}")
     
-    response_data = await chat_service.process_lesson_init(request, user_id=x_user_id)
+    response_data = await chat_service.process_lesson_init(request, user_id=x_user_id, request_id=x_request_id)
     
     duration = time.perf_counter() - start_time
     logger.info(
-        f"Lesson init completed | sessionId: {request.sessionId} | "
+        f"[AI_RESPONSE_SENT] Lesson init completed | sessionId: {request.sessionId} | reqId: {x_request_id} | "
         f"provider: {response_data.provider} | model: {response_data.model} | "
         f"duration: {duration:.4f}s"
     )
+
     
     return ApiResponse[ChatResponse](
         success=True,

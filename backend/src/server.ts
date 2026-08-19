@@ -11,10 +11,10 @@ import { generateVerificationToken } from './utils/token';
  */
 async function seedDemoUser(): Promise<void> {
   try {
-    const email = 'rahul.@fluentai.app';
+    const email = 'rahul@fluentai.app';
     const existing = await prisma.user.findUnique({ where: { email } });
     if (!existing) {
-      logger.info('🌱 Seeding default demo account: rahul.@fluentai.app...');
+      logger.info('🌱 Seeding default demo account: rahul@fluentai.app...');
       const passwordHash = await hashPassword('password123');
       const { hashedToken } = generateVerificationToken();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours expiry
@@ -22,7 +22,7 @@ async function seedDemoUser(): Promise<void> {
       await prisma.$transaction(async (tx) => {
         const user = await tx.user.create({
           data: {
-            name: 'Rahul Nair',
+            name: 'Rahul',
             email,
             password: passwordHash,
             nativeLanguage: 'ml',
