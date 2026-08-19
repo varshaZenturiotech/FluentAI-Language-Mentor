@@ -110,6 +110,20 @@ export class StudyPlanRepository {
         const updatedDays: any[] = [];
         let curriculumActuallyChanged = false;
 
+        // Batch query active session IDs across all days in a single roundtrip
+        const existingDayIds = existingDays.map((d: any) => d.id);
+        const [activeLessonSessions, activeConvSessions, activeLearningSessions] = await Promise.all([
+          tx.lessonSession.findMany({ where: { dayId: { in: existingDayIds } }, select: { dayId: true } }),
+          tx.conversationSession.findMany({ where: { lessonId: { in: existingDayIds } }, select: { lessonId: true } }),
+          tx.learningSession.findMany({ where: { studyPlanDayId: { in: existingDayIds } }, select: { studyPlanDayId: true } }),
+        ]);
+
+        const activeDayIdSet = new Set<string>([
+          ...activeLessonSessions.map((s: any) => s.dayId).filter(Boolean),
+          ...activeConvSessions.map((s: any) => s.lessonId).filter(Boolean),
+          ...activeLearningSessions.map((s: any) => s.studyPlanDayId).filter(Boolean),
+        ]);
+
         for (const day of dto.days) {
           const parsedDayNumber = parseInt(day.dayNumber as any, 10);
           const parsedWeekNumber = parseInt(day.weekNumber as any, 10);
@@ -118,16 +132,7 @@ export class StudyPlanRepository {
           const existingDay = existingDays.find((d: any) => d.dayNumber === parsedDayNumber);
 
           if (existingDay) {
-            // -------------------------------------------------------
-            // Activity detection – check all three session models
-            // -------------------------------------------------------
-            const [hasLessonSession, hasConversationSession, hasLearningSession] = await Promise.all([
-              tx.lessonSession.findFirst({ where: { dayId: existingDay.id } }),
-              tx.conversationSession.findFirst({ where: { lessonId: existingDay.id } }),
-              tx.learningSession.findFirst({ where: { studyPlanDayId: existingDay.id } }),
-            ]);
-
-            const hasActivity = !!hasLessonSession || !!hasConversationSession || !!hasLearningSession;
+            const hasActivity = activeDayIdSet.has(existingDay.id);
 
             // Never touch completed days or days with any recorded activity
             if (existingDay.status === 'COMPLETED' || hasActivity) {
@@ -229,7 +234,7 @@ export class StudyPlanRepository {
         });
         return createdPlan;
       }
-    });
+    }, { timeout: 30000, maxWait: 10000 });
   }
 
   async findDayById(dayId: string) {

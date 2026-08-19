@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     GROQ_API_KEY: str = Field(..., description="API key for Groq")
-    GROQ_MODEL: str = Field(default="qwen/qwen3.6-27b", description="Model name for Groq completions")
+    GROQ_MODEL: str = Field(default="groq/compound", description="Model name for Groq completions")
     GROQ_STT_MODEL: str = Field(default="whisper-large-v3", description="Model name for Groq speech-to-text")
     REQUEST_TIMEOUT: float = Field(default=120.0, description="Global request timeout in seconds")
     LOG_LEVEL: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)")
